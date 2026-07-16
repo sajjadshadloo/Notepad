@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# PyInstaller build artifacts
+build/
+dist/
+*.spec.bak
+
+# App data / user content
+data/notes.json
+
+# OS
+Thumbs.db
+desktop.ini
+
+# Test / smoke artifacts
+.smoke-data/
+.test-tmp-managed2/
+.tmp-py310-deps/
+.gutter-check.png
