@@ -1,8 +1,27 @@
 import codecs
 import os
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
+
+
+def replace_with_retry(source, target, attempts: int = 6, first_delay: float = 0.05):
+    """os.replace with a short backoff when Windows reports the file in use.
+
+    Antivirus and search-indexer processes routinely hold freshly written
+    files open for a moment; without retries that surfaces as WinError 32/5.
+    """
+    delay = first_delay
+    for attempt in range(attempts):
+        try:
+            os.replace(source, target)
+            return
+        except OSError as exc:
+            if attempt == attempts - 1 or getattr(exc, "winerror", None) not in (5, 32):
+                raise
+        time.sleep(delay)
+        delay *= 2
 
 
 @dataclass(frozen=True)
@@ -54,7 +73,7 @@ def write_text_file_atomic(path: str | Path, text: str, encoding: str = "utf-8")
             os.fsync(stream.fileno())
         if target.exists():
             os.chmod(temp_name, target.stat().st_mode)
-        os.replace(temp_name, target)
+        replace_with_retry(temp_name, target)
     except Exception:
         try:
             os.unlink(temp_name)

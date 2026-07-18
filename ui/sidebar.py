@@ -42,13 +42,16 @@ class Sidebar(QWidget):
     note_activated = pyqtSignal(str)
     root_changed = pyqtSignal(str)
 
-    def __init__(self, root: str, parent=None):
+    def __init__(self, root: str, index: dict | None = None, parent=None):
         super().__init__(parent)
         self.setObjectName("sidebar")
         self.root = root
-        self._index = note_index.load()
+        # The main window shares its index dict so both always see the same
+        # pins/tags/timestamps and never overwrite each other's saves.
+        self._index = note_index.load() if index is None else index
         self._active_tags: set[str] = set()
         self._search_worker: _SearchWorker | None = None
+        self._needs_refresh = True
 
         # Match the application's intended Latin/Persian font chain. Segoe UI
         # contains Arabic glyphs, so placing it before Vazirmatn silently made
@@ -95,8 +98,6 @@ class Sidebar(QWidget):
         self.note_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.note_list.customContextMenuRequested.connect(self._show_context_menu)
         layout.addWidget(self.note_list, 1)
-
-        self.refresh()
 
     def _short_root(self) -> str:
         name = Path(self.root).name or self.root
@@ -176,6 +177,16 @@ class Sidebar(QWidget):
             self.note_list.addItem(item)
 
     def refresh(self):
+        """Rescan the notes folder — but only while the sidebar is visible.
+
+        The sidebar is hidden by default, so scanning a possibly large folder
+        at startup (or after every save) would be wasted work; the pending
+        refresh runs once in showEvent instead.
+        """
+        if not self.isVisible():
+            self._needs_refresh = True
+            return
+        self._needs_refresh = False
         root_path = Path(self.root)
         root_path.mkdir(parents=True, exist_ok=True)
         files = [
@@ -267,14 +278,15 @@ class Sidebar(QWidget):
             return f"{delta_days} days ago"
         return moment.strftime("%Y-%m-%d")
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._needs_refresh:
+            self.refresh()
+
     def _activate_item(self, item: QListWidgetItem):
         path = item.data(Qt.ItemDataRole.UserRole)
         if path:
             self.note_activated.emit(path)
-
-    def note_opened(self, path: str):
-        note_index.touch(self._index, path)
-        self.refresh()
 
     def _show_context_menu(self, position):
         item = self.note_list.itemAt(position)

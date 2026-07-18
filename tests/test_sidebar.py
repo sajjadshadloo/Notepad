@@ -82,9 +82,28 @@ def test_persian_note_uses_vazirmatn_fallback_and_right_alignment(tmp_path, qapp
     note = tmp_path / "یادداشت فارسی.txt"
     note.write_text("متن", encoding="utf-8")
     sidebar = Sidebar(str(tmp_path))
+    sidebar.show()
 
     item = sidebar.note_list.item(0)
 
     assert item.text().startswith(note.name)
     assert item.textAlignment() & int(Qt.AlignmentFlag.AlignRight)
     assert item.font().families()[:3] == ["Inter", "Vazirmatn", "Segoe UI"]
+
+
+def test_hidden_sidebar_defers_scanning_until_shown(tmp_path, qapp):
+    (tmp_path / "note.txt").write_text("hi", encoding="utf-8")
+    sidebar = Sidebar(str(tmp_path))
+
+    assert sidebar.note_list.count() == 0  # hidden: no scan yet
+    sidebar.refresh()
+    assert sidebar.note_list.count() == 0  # still hidden: refresh only marks dirty
+
+    sidebar.show()
+    assert sidebar.note_list.count() == 1  # showEvent runs the pending refresh
+
+
+def test_sidebar_shares_the_window_index_object(tmp_path, qapp):
+    shared: dict = {}
+    sidebar = Sidebar(str(tmp_path), shared)
+    assert sidebar._index is shared

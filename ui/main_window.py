@@ -62,7 +62,7 @@ from ui.styles import build_stylesheet
 
 
 APP_TITLE = "Notepad Plus"
-APP_VERSION = "2.5.0"
+APP_VERSION = "2.6.0"
 FILE_FILTER = "Text Files (*.txt);;Markdown (*.md *.markdown);;All Files (*.*)"
 ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 
@@ -255,7 +255,6 @@ class FindReplaceDialog(QDialog):
 class MainWindow(QMainWindow):
     def __init__(self, initial_files: list[str] | None = None):
         super().__init__()
-        _load_bundled_fonts()
         self._cfg = settings_manager.load()
         save_dir = settings_manager.resolve_save_dir(self._cfg)
         if not self._cfg.get("notes_root"):
@@ -613,7 +612,7 @@ class MainWindow(QMainWindow):
         tab_bar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         tab_bar.customContextMenuRequested.connect(self._show_tab_menu)
 
-        self.sidebar = Sidebar(self._cfg["notes_root"])
+        self.sidebar = Sidebar(self._cfg["notes_root"], self._note_index)
         self.sidebar.note_activated.connect(self._open_from_sidebar)
         self.sidebar.root_changed.connect(self._sidebar_root_changed)
         self.sidebar.setVisible(self._cfg.get("sidebar_visible", False))
@@ -1410,6 +1409,10 @@ class MainWindow(QMainWindow):
         return True
 
     def _offer_legacy_migration(self):
+        # A hidden window must never raise a modal prompt: the deferred
+        # timer can fire after the window closed (or in tests).
+        if not self.isVisible():
+            return
         if self._cfg.get("migration_checked") or not legacy_notes_available():
             return
         answer = QMessageBox.question(
@@ -1443,6 +1446,20 @@ class MainWindow(QMainWindow):
         settings_manager.save(self._cfg)
 
     # Window integration
+
+    def open_from_another_instance(self, paths: list[str]):
+        """A second launch handed us its file paths: open them and come to
+        the front (an empty list still raises the window)."""
+        for path in paths:
+            if os.path.isfile(path):
+                self.open_file(path)
+        self.setWindowState(
+            (self.windowState() & ~Qt.WindowState.WindowMinimized)
+            | Qt.WindowState.WindowActive
+        )
+        self.show()
+        self.raise_()
+        self.activateWindow()
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls() and any(

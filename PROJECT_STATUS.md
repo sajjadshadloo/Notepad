@@ -2,7 +2,55 @@
 
 مرجع داخلی توسعه. قبل از هر تغییر بزرگ این فایل را بخوان و بعد از آن به‌روزش کن.
 
-## نسخه فعلی: 2.5.0
+## نسخه فعلی: 2.6.0
+
+### تغییرات 2.6.0 — پایداری و سرعت استارت (2026-07-18)
+
+- **رفع کرش WinError 32 موقع استارت**: دو اجرای هم‌زمان برنامه (دابل‌کلیک
+  دوباره وقتی استارت کند بود) سر نوشتن `notes_index.json` با هم برخورد
+  می‌کردند و `os.replace` بدون try/except کل برنامه را می‌کشت. سه لایه رفع:
+  1. **Single-Instance** (`core/single_instance.py`): اجرای اول
+     `QLockFile` (با `setStaleLockTime(0)` — پیش‌فرض ۳۰ ثانیه‌ای قفل سالم را
+     آزاد می‌کرد!) + `QLocalServer` می‌گیرد؛ اجرای دوم مسیر فایل‌هایش را
+     می‌فرستد و خارج می‌شود؛ پنجره اول جلو می‌آید
+     (`open_from_another_instance`). قفلِ پروسه کرش‌شده خودکار پاک می‌شود.
+     **نکته ویندوزی:** سمت سرور `waitForReadyRead` وقتی داده همراه اتصال
+     رسیده باشد False می‌دهد — اول `bytesAvailable` را چک کن.
+  2. **`replace_with_retry`** در `core/file_service.py`: retry با backoff
+     روی WinError 5/32 (آنتی‌ویروس/ایندکسر). در ذخیره فایل، تنظیمات، ایندکس
+     و recovery استفاده می‌شود.
+  3. ذخیره ایندکس/تنظیمات/recovery حالا **best-effort** است: شکست فقط لاگ
+     می‌شود (از دست رفتن یک pin بهتر از کرش است). ذخیره خود سند همچنان
+     خطا را به کاربر نشان می‌دهد.
+- **ایندکس مشترک**: سایدبار دیگر `note_index.load()` جداگانه ندارد و همان
+  dict پنجره اصلی را می‌گیرد (`Sidebar(root, index)`) — قبلاً دو کپی جدا
+  روی یک فایل می‌نوشتند (last-writer-wins) و مرتب‌سازی سایدبار تا ری‌استارت
+  کهنه می‌ماند. متد مرده `note_opened` حذف شد.
+- **استارت سریع**:
+  - بیلد PyInstaller از **onefile به onedir** تغییر کرد و **UPX خاموش** شد —
+    onefile هر بار کل PyQt6 را در Temp استخراج می‌کرد (عامل اصلی کندی) و
+    UPX هم اسکن آنتی‌ویروس را تحریک می‌کرد. نصاب Inno حالا کل پوشه
+    `dist\NotepadPlus\` را می‌برد؛ خروجی پرتابل، خود پوشه است نه تک‌فایل.
+  - **اسکن تنبل سایدبار**: `refresh()` وقتی سایدبار مخفی است فقط پرچم
+    `_needs_refresh` می‌زند و `showEvent` اسکن واقعی را انجام می‌دهد —
+    استارتاپ (سایدبار پیش‌فرض مخفی) دیگر `rglob` کل پوشه یادداشت‌ها را
+    نمی‌پردازد.
+  - بار تکراری فونت‌ها حذف شد (`_load_bundled_fonts` فقط در `main.py`).
+- **هندلر سراسری خطا + لاگ**: `sys.excepthook` در `main.py` خطای هندل‌نشده
+  را در `AppData\...\logs\notepad.log` (RotatingFileHandler، ۲ بکاپ) ثبت و
+  پیام سادهٔ کاربرپسند نشان می‌دهد — دیگر دیالوگ خام
+  «Failed to execute script» ظاهر نمی‌شود و برنامه باز می‌ماند.
+- مسیر فایل‌های آرگومان خط فرمان حالا قبل از ارسال به نمونه اول resolve
+  می‌شوند (cwd نمونه دوم متفاوت است).
+- `hiddenimports` شامل `PyQt6.QtNetwork` شد.
+- مجموعه تست: **۱۲۱ تست** سبز (۶ تست جدید single-instance/retry در
+  `tests/test_single_instance.py` + ۲ تست تنبلی/اشتراک ایندکس سایدبار؛ تست
+  فارسی سایدبار حالا `sidebar.show()` می‌کند چون اسکن تا نمایش به تعویق
+  می‌افتد). **نکته Qt6/ویندوز:** نوشتن QLocalSocket فقط با چرخش event loop
+  تخلیه می‌شود — flush/waitForBytesWritten کافی نیست؛ تا صفر شدن
+  `bytesToWrite` باید `processEvents` چرخید. `_offer_legacy_migration` هم
+  حالا روی پنجره مخفی early-return می‌کند تا دیالوگ مودال بعد از بستن پنجره
+  (یا در تست‌ها) باز نشود.
 
 ### تغییرات 2.5.0
 
@@ -193,11 +241,12 @@ ui/
   settings_dialog.py پنجره تنظیمات (تم، فونت، اندازه، word wrap، پوشه ذخیره)
   editor.py          SmartEditor: شماره خط (همیشه چپ)، جهت پاراگرافی، بلوک کد، Ctrl+Wheel zoom
   document_tab.py    تب: ویرایشگر + پیش‌نمایش Markdown + نوار کد + شمارنده کلمه (کش‌شده)
-  sidebar.py         نوار کناری یادداشت‌ها (پیش‌فرض مخفی، Ctrl+B)
+  sidebar.py         نوار کناری یادداشت‌ها (پیش‌فرض مخفی، Ctrl+Shift+B؛ اسکن تنبل)
   styles.py          استایل‌شیت تیره/روشن/سیستم (LTR)
-installer.iss        اسکریپت Inno Setup
+core/single_instance.py  قفل تک‌نمونه + سوکت محلی برای ارسال فایل به نمونه اول
+installer.iss        اسکریپت Inno Setup (کل پوشه onedir)
 version_info.txt     اطلاعات نسخه exe ویندوز
-notepad.spec         PyInstaller (onefile، بدون پوشه data)
+notepad.spec         PyInstaller (onedir، بدون UPX)
 ```
 
 ## تغییرات نسخه 2.0.0
@@ -226,12 +275,13 @@ notepad.spec         PyInstaller (onefile، بدون پوشه data)
 
 ```powershell
 python main.py                                            # اجرا
-python -m pytest -q                                       # تست (۱۱۳ تست)
-python -m PyInstaller --clean --noconfirm notepad.spec    # ساخت exe پرتابل
+python -m pytest -q                                       # تست (۱۲۱ تست)
+python -m PyInstaller --clean --noconfirm notepad.spec    # ساخت پوشه onedir
 & "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" installer.iss   # ساخت نصاب
 ```
 
-خروجی‌ها: `dist\NotepadPlus.exe` (پرتابل) و `dist\NotepadPlus-Setup-2.5.0.exe` (نصاب).
+خروجی‌ها: پوشه `dist\NotepadPlus\` (پرتابل — exe داخل همین پوشه) و
+`dist\NotepadPlus-Setup-2.6.0.exe` (نصاب).
 
 ## کارهای باقی‌مانده / پیشنهادها
 

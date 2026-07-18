@@ -1,9 +1,12 @@
 import json
-import os
+import logging
 from pathlib import Path
 from uuid import uuid4
 
+from core.file_service import replace_with_retry
 from core.settings_manager import app_data_dir
+
+log = logging.getLogger(__name__)
 
 
 def recovery_dir() -> Path:
@@ -39,10 +42,19 @@ def save_recovery(
         "title": title,
         "direction_mode": direction_mode,
     }
-    temporary.write_text(
-        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
-    )
-    os.replace(temporary, destination)
+    # Best effort: the snapshot timer fires every 10 seconds, so one missed
+    # write is recovered by the next tick — never worth crashing over.
+    try:
+        temporary.write_text(
+            json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+        )
+        replace_with_retry(temporary, destination)
+    except OSError:
+        log.warning("Could not write recovery snapshot %s", destination, exc_info=True)
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def remove_recovery(recovery_id: str):

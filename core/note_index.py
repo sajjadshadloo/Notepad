@@ -1,9 +1,12 @@
 import json
-import os
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
+from core.file_service import replace_with_retry
 from core.settings_manager import app_data_dir
+
+log = logging.getLogger(__name__)
 
 
 def index_file() -> Path:
@@ -21,13 +24,22 @@ def load() -> dict:
 
 
 def save(index: dict):
+    """Best effort: losing a pin/tag update beats crashing the app, so a
+    persistent lock on the index file is logged instead of raised."""
     path = index_file()
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(
-        json.dumps(index, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    os.replace(tmp, path)
+    try:
+        tmp.write_text(
+            json.dumps(index, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        replace_with_retry(tmp, path)
+    except OSError:
+        log.warning("Could not save the note index to %s", path, exc_info=True)
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _normalize(path: str) -> str:

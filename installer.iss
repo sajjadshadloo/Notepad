@@ -1,8 +1,8 @@
 ﻿; Inno Setup script for Notepad Plus
-; Build:  ISCC.exe installer.iss   (after PyInstaller has produced dist\NotepadPlus.exe)
+; Build:  ISCC.exe installer.iss   (after PyInstaller has produced dist\NotepadPlus\)
 
 #define MyAppName "Notepad Plus"
-#define MyAppVersion "2.5.0"
+#define MyAppVersion "2.6.0"
 #define MyAppPublisher "Sajjad"
 #define MyAppExeName "NotepadPlus.exe"
 
@@ -29,7 +29,8 @@ ArchitecturesInstallIn64BitMode=x64compatible
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional shortcuts:"
 
 [Files]
-Source: "dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+; onedir build: ship the whole PyInstaller output folder
+Source: "dist\NotepadPlus\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; Standalone .ico so shortcuts get a fresh icon-cache entry on upgrades
 Source: "assets\icon.ico"; DestDir: "{app}"; DestName: "NotepadPlus.ico"; Flags: ignoreversion
 

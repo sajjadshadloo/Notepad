@@ -1,8 +1,13 @@
 import json
+import logging
 import os
 from pathlib import Path
 
 from PyQt6.QtCore import QStandardPaths
+
+from core.file_service import replace_with_retry
+
+log = logging.getLogger(__name__)
 
 
 def _documents_dir() -> Path:
@@ -98,13 +103,22 @@ def load() -> dict:
 
 
 def save(settings: dict):
+    """Best effort: settings are rewritten on every toggle, so a transient
+    lock is retried and a persistent one logged rather than crashing."""
     path = settings_file()
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(
-        json.dumps({**DEFAULTS, **settings}, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    os.replace(tmp, path)
+    try:
+        tmp.write_text(
+            json.dumps({**DEFAULTS, **settings}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        replace_with_retry(tmp, path)
+    except OSError:
+        log.warning("Could not save settings to %s", path, exc_info=True)
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def add_recent_file(settings: dict, file_path: str, limit: int = 10) -> dict:
