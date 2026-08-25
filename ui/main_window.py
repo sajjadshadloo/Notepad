@@ -37,7 +37,8 @@ from PyQt6.QtWidgets import (
 
 import core.note_index as note_index
 import core.settings_manager as settings_manager
-from core.export_service import export_to_docx, export_to_html, export_to_pdf
+from core.external_change_monitor import ExternalChangeMonitor
+from core.export_service import export_to_html, export_to_pdf
 from core.formatting import (
     toggle_bold,
     toggle_bullet,
@@ -55,6 +56,7 @@ from core.recovery_manager import (
     save_recovery,
 )
 from ui.document_tab import DocumentTab, editor_font
+from ui.quick_open import QuickOpenDialog
 from ui.settings_dialog import SettingsDialog
 from ui.shortcuts_dialog import ShortcutsDialog
 from ui.sidebar import Sidebar
@@ -62,13 +64,13 @@ from ui.styles import build_stylesheet
 
 
 APP_TITLE = "Notepad Plus"
-APP_VERSION = "2.6.0"
+APP_VERSION = "3.2.0"
 FILE_FILTER = "Text Files (*.txt);;Markdown (*.md *.markdown);;All Files (*.*)"
 ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 
 # Word counting walks the whole document; above this size the status bar
 # shows only the character count so typing stays instant.
-WORD_COUNT_LIMIT = 1_000_000
+WORD_COUNT_LIMIT = 200_000
 
 
 class DocumentTabBar(QTabBar):
@@ -134,7 +136,9 @@ def _load_bundled_fonts():
 class FindReplaceDialog(QDialog):
     def __init__(self, window):
         super().__init__(window)
-        self.window = window
+        # Not ``self.window``: QWidget already defines a window() method, and
+        # shadowing it breaks any Qt code that walks up to the top level.
+        self._window = window
         self.setWindowTitle("Find and Replace")
         self.setModal(False)
         self.setMinimumWidth(420)
@@ -176,7 +180,7 @@ class FindReplaceDialog(QDialog):
         self.replace_input.returnPressed.connect(self.replace_one)
 
     def _editor(self):
-        tab = self.window.current_document()
+        tab = self._window.current_document()
         return tab.editor if tab else None
 
     def _flags(self, backward: bool = False):
@@ -197,7 +201,7 @@ class FindReplaceDialog(QDialog):
         if editor.find(needle, self._flags(backward)):
             return True
         if not self.wrap_checkbox.isChecked():
-            self.window.statusBar().showMessage(f'Cannot find "{needle}"', 3000)
+            self._window.statusBar().showMessage(f'Cannot find "{needle}"', 3000)
             return False
         cursor = editor.textCursor()
         cursor.movePosition(
@@ -208,7 +212,7 @@ class FindReplaceDialog(QDialog):
         editor.setTextCursor(cursor)
         if editor.find(needle, self._flags(backward)):
             return True
-        self.window.statusBar().showMessage(f'Cannot find "{needle}"', 3000)
+        self._window.statusBar().showMessage(f'Cannot find "{needle}"', 3000)
         return False
 
     def find_next(self) -> bool:
@@ -247,7 +251,7 @@ class FindReplaceDialog(QDialog):
             editor.textCursor().insertText(self.replace_input.text())
             count += 1
         cursor.endEditBlock()
-        self.window.statusBar().showMessage(
+        self._window.statusBar().showMessage(
             f"Replaced {count} occurrence{'s' if count != 1 else ''}.", 3000
         )
 
@@ -261,10 +265,22 @@ class MainWindow(QMainWindow):
             self._cfg["notes_root"] = str(save_dir)
             settings_manager.save(self._cfg)
         self._note_index = note_index.load()
+        self._file_monitor = ExternalChangeMonitor(self)
+        self._file_monitor.changed.connect(self._external_file_changed)
+        self._file_monitor.missing.connect(self._external_file_missing)
         self._closing_application = False
         self._zoom_steps = 0
         self._recently_closed: list[str] = []
+        # Fingerprint of the last snapshot written per tab, plus which tabs
+        # currently have a file on disk, so the timer can skip both the write
+        # and the delete when nothing has moved.
+        self._recovery_marks: dict[str, tuple] = {}
+        self._recovery_on_disk: set[str] = set()
         self._find_dialog = FindReplaceDialog(self)
+        # Zero-interval single shot: restarting it before it fires simply
+        # replaces the pending call, so a burst of edits produces one refresh.
+        self._status_timer = QTimer(self, singleShot=True, interval=0)
+        self._status_timer.timeout.connect(self._refresh_status)
 
         self.setWindowTitle(APP_TITLE)
         self.setWindowIcon(_app_icon())
@@ -282,14 +298,18 @@ class MainWindow(QMainWindow):
         self._recovery_timer.timeout.connect(self._write_recoveries)
         self._recovery_timer.start()
 
-        recovered = self._offer_recovery()
         opened = False
         for path in initial_files or []:
             opened = self.open_file(path) or opened
-        if not recovered and not opened:
+        if not opened:
             self.new_document()
 
-        QTimer.singleShot(250, self._offer_legacy_migration)
+        # Recovery and migration both raise modal prompts, and neither may run
+        # from here: the window is not on screen yet, so the dialog gets no
+        # visible parent, never reaches the taskbar, and can end up behind
+        # other windows — the app then looks like it simply failed to start.
+        # showEvent runs them once the window is actually up.
+        self._startup_prompts_shown = False
 
     # Actions and chrome
 
@@ -305,6 +325,9 @@ class MainWindow(QMainWindow):
         # File
         self.new_action = self._action("&New", self.new_document, "Ctrl+N")
         self.open_action = self._action("&Open…", self.open_dialog, "Ctrl+O")
+        self.quick_open_action = self._action(
+            "&Go to File…", self.show_quick_open, "Ctrl+P"
+        )
         self.save_action = self._action("&Save", self.save_current, "Ctrl+S")
         self.save_as_action = self._action(
             "Save &As…", self.save_current_as, "Ctrl+Shift+S"
@@ -423,9 +446,6 @@ class MainWindow(QMainWindow):
             "&Line Numbers", self.toggle_line_numbers, checkable=True
         )
         self.line_numbers_action.setChecked(self._cfg.get("show_line_numbers", True))
-        self.preview_action = self._action(
-            "&Markdown Preview", self.toggle_preview, "Ctrl+Shift+M", checkable=True
-        )
         self.shortcuts_action = self._action(
             "&Keyboard Shortcuts", self.show_shortcuts, "Ctrl+/"
         )
@@ -433,7 +453,6 @@ class MainWindow(QMainWindow):
 
         # Export
         self.export_pdf_action = self._action("PDF…", lambda: self._export_current("pdf"))
-        self.export_docx_action = self._action("Word (.docx)…", lambda: self._export_current("docx"))
         self.export_html_action = self._action("HTML…", lambda: self._export_current("html"))
         self.export_md_action = self._action("Markdown (.md)…", lambda: self._export_current("md"))
 
@@ -476,7 +495,10 @@ class MainWindow(QMainWindow):
             )
             self.direction_group.addAction(action)
             self.direction_actions[key] = action
-        self.direction_actions["auto"].setChecked(True)
+        startup_direction = self._cfg.get("default_direction", "rtl")
+        self.direction_actions.get(
+            startup_direction, self.direction_actions["rtl"]
+        ).setChecked(True)
 
         # Theme
         self.theme_group = QActionGroup(self)
@@ -497,6 +519,7 @@ class MainWindow(QMainWindow):
         file_menu = self.menuBar().addMenu("&File")
         file_menu.addAction(self.new_action)
         file_menu.addAction(self.open_action)
+        file_menu.addAction(self.quick_open_action)
         file_menu.addSeparator()
         file_menu.addAction(self.save_action)
         file_menu.addAction(self.save_as_action)
@@ -506,7 +529,6 @@ class MainWindow(QMainWindow):
         # changed from the status bar chip, keeping the File menu lean.
         export_menu = file_menu.addMenu("Ex&port")
         export_menu.addAction(self.export_pdf_action)
-        export_menu.addAction(self.export_docx_action)
         export_menu.addAction(self.export_html_action)
         export_menu.addAction(self.export_md_action)
         file_menu.addSeparator()
@@ -564,7 +586,6 @@ class MainWindow(QMainWindow):
         view_menu.addAction(self.line_numbers_action)
         view_menu.addAction(self.sidebar_action)
         view_menu.addAction(self.sidebar_right_action)
-        view_menu.addAction(self.preview_action)
 
         help_menu = self.menuBar().addMenu("&Help")
         help_menu.addAction(self.shortcuts_action)
@@ -612,7 +633,11 @@ class MainWindow(QMainWindow):
         tab_bar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         tab_bar.customContextMenuRequested.connect(self._show_tab_menu)
 
-        self.sidebar = Sidebar(self._cfg["notes_root"], self._note_index)
+        self.sidebar = Sidebar(
+            self._cfg["notes_root"],
+            self._note_index,
+            font_families=settings_manager.font_chain(self._cfg),
+        )
         self.sidebar.note_activated.connect(self._open_from_sidebar)
         self.sidebar.root_changed.connect(self._sidebar_root_changed)
         self.sidebar.setVisible(self._cfg.get("sidebar_visible", False))
@@ -672,9 +697,20 @@ class MainWindow(QMainWindow):
         base = self._cfg.get("font_size", 14)
         return max(6, min(72, base + self._zoom_steps))
 
+    def _default_direction(self) -> str:
+        return self._cfg.get("default_direction", "rtl")
+
     def _make_document(self, **kwargs) -> DocumentTab:
+        kwargs.setdefault("direction_mode", self._default_direction())
+        # A file that was switched by hand keeps that choice across sessions.
+        path = kwargs.get("path")
+        if path:
+            remembered = note_index.direction_for(self._note_index, path)
+            if remembered:
+                kwargs["direction_mode"] = remembered
         tab = DocumentTab(
-            font_family=self._cfg.get("font_family", "Vazirmatn"),
+            font_family=self._cfg.get("font_family_latin", "Inter"),
+            font_family_persian=self._cfg.get("font_family_persian", "Vazirmatn"),
             font_size=self._effective_font_size(),
             **kwargs,
         )
@@ -753,7 +789,9 @@ class MainWindow(QMainWindow):
                 self, "Rename Failed", f"The file could not be renamed:\n{exc}"
             )
             return
+        old_path = tab.path
         tab.path = str(destination.resolve())
+        self._file_monitor.move(old_path, tab.path)
         self._add_recent(tab.path)
         self._document_state_changed(tab)
         self.statusBar().showMessage(f"Renamed to {destination.name}", 3000)
@@ -807,6 +845,12 @@ class MainWindow(QMainWindow):
         for path in paths:
             self.open_file(path)
 
+    def show_quick_open(self):
+        """Ctrl+P — find a note by name without leaving the keyboard."""
+        dialog = QuickOpenDialog(self._cfg["notes_root"], self)
+        dialog.note_chosen.connect(self.open_file)
+        dialog.exec()
+
     def open_file(self, path: str) -> bool:
         candidate = str(Path(path).resolve())
         for index in range(self.tabs.count()):
@@ -822,22 +866,36 @@ class MainWindow(QMainWindow):
             )
             return False
         # Replace an unused empty tab instead of leaving it behind.
-        replaceable = (
-            self.tabs.count() == 1
-            and not self.tabs.widget(0).path
-            and not self.tabs.widget(0).modified
-            and not self.tabs.widget(0).text
-        )
+        placeholder = self._placeholder_tab()
         self._make_document(text=loaded.text, path=candidate, encoding=loaded.encoding)
-        if replaceable:
-            stale = self.tabs.widget(0)
-            self.tabs.removeTab(0)
-            stale.deleteLater()
+        self._file_monitor.watch(candidate)
+        self._discard_placeholder(placeholder)
         self._add_recent(candidate)
         note_index.touch(self._note_index, candidate)
         self.sidebar.refresh()
         self.statusBar().showMessage(f"Opened {candidate}", 3000)
         return True
+
+    def _placeholder_tab(self) -> DocumentTab | None:
+        """The lone untouched blank document, if that is all there is.
+
+        Opening or recovering a file should take its place rather than leave
+        an empty "Untitled" tab sitting next to the real one.
+        """
+        if self.tabs.count() != 1:
+            return None
+        tab = self.tabs.widget(0)
+        if isinstance(tab, DocumentTab) and not tab.path and not tab.modified and not tab.text:
+            return tab
+        return None
+
+    def _discard_placeholder(self, tab: DocumentTab | None):
+        if tab is None:
+            return
+        index = self.tabs.indexOf(tab)
+        if index >= 0 and self.tabs.count() > 1:
+            self.tabs.removeTab(index)
+            tab.deleteLater()
 
     def save_current(self) -> bool:
         tab = self.current_document()
@@ -866,6 +924,7 @@ class MainWindow(QMainWindow):
         return self._save_document(tab, path)
 
     def _save_document(self, tab: DocumentTab, path: str) -> bool:
+        previous_path = tab.path
         try:
             write_text_file_atomic(path, tab.text, tab.encoding)
         except (OSError, UnicodeError) as exc:
@@ -874,6 +933,9 @@ class MainWindow(QMainWindow):
             )
             return False
         tab.path = str(Path(path).resolve())
+        if previous_path and os.path.normcase(previous_path) != os.path.normcase(tab.path):
+            self._file_monitor.unwatch(previous_path)
+        self._file_monitor.watch(tab.path)
         tab.mark_clean()
         remove_recovery(tab.recovery_id)
         self._add_recent(tab.path)
@@ -896,6 +958,7 @@ class MainWindow(QMainWindow):
         if tab.path:
             self._recently_closed.append(tab.path)
             del self._recently_closed[:-10]
+            self._file_monitor.unwatch(tab.path)
         remove_recovery(tab.recovery_id)
         self.tabs.removeTab(index)
         tab.deleteLater()
@@ -934,6 +997,144 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentWidget(tab)
         return self.save_current()
 
+    def _document_for_path(self, path: str) -> DocumentTab | None:
+        normalized = os.path.normcase(str(Path(path).resolve()))
+        for index in range(self.tabs.count()):
+            tab = self.tabs.widget(index)
+            if (
+                isinstance(tab, DocumentTab)
+                and tab.path
+                and os.path.normcase(str(Path(tab.path).resolve())) == normalized
+            ):
+                return tab
+        return None
+
+    def _reload_document_from_disk(self, tab: DocumentTab) -> bool:
+        if not tab.path:
+            return False
+        try:
+            loaded = read_text_file(tab.path)
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Reload Failed",
+                f"The changed file could not be reloaded:\n{exc}",
+            )
+            self._file_monitor.acknowledge(tab.path)
+            return False
+
+        position = tab.editor.textCursor().position()
+        tab.editor.setPlainText(loaded.text)
+        cursor = tab.editor.textCursor()
+        cursor.setPosition(min(position, len(loaded.text)))
+        tab.editor.setTextCursor(cursor)
+        tab.encoding = loaded.encoding
+        tab.mark_clean()
+        remove_recovery(tab.recovery_id)
+        self._file_monitor.acknowledge(tab.path)
+        self._document_state_changed(tab)
+        self._update_status()
+        self.statusBar().showMessage(f"Reloaded {tab.path}", 3000)
+        return True
+
+    def _keep_document_version(self, tab: DocumentTab, path: str):
+        tab.editor.document().setModified(True)
+        self._file_monitor.acknowledge(path)
+        self._document_state_changed(tab)
+        self.statusBar().showMessage(
+            "Keeping the editor version. Save to overwrite the disk version.",
+            5000,
+        )
+
+    def _save_external_copy(self, tab: DocumentTab) -> bool:
+        if tab.path:
+            source = Path(tab.path)
+            suggested = source.with_name(f"{source.stem} copy{source.suffix}")
+        else:
+            suggested = settings_manager.resolve_save_dir(self._cfg) / "Untitled.txt"
+        path, selected_filter = QFileDialog.getSaveFileName(
+            self, "Save a Copy", str(suggested), FILE_FILTER
+        )
+        if not path:
+            return False
+        if not Path(path).suffix:
+            path += ".md" if selected_filter.startswith("Markdown") else ".txt"
+        return self._save_document(tab, path)
+
+    def _external_file_changed(self, path: str):
+        if self._closing_application:
+            return
+        tab = self._document_for_path(path)
+        if tab is None:
+            self._file_monitor.unwatch(path)
+            return
+        self.tabs.setCurrentWidget(tab)
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("File Changed on Disk")
+        box.setText(f'"{tab.display_name}" was changed by another application.')
+        if tab.modified:
+            box.setInformativeText(
+                "This tab also has unsaved changes. Choose which version to keep."
+            )
+        else:
+            box.setInformativeText("Reload the newer version from disk?")
+        reload_button = box.addButton("Reload", QMessageBox.ButtonRole.AcceptRole)
+        keep_button = box.addButton(
+            "Keep My Version", QMessageBox.ButtonRole.RejectRole
+        )
+        copy_button = box.addButton(
+            "Save a Copy…", QMessageBox.ButtonRole.ActionRole
+        )
+        box.setDefaultButton(keep_button if tab.modified else reload_button)
+        box.exec()
+
+        if box.clickedButton() == reload_button:
+            self._reload_document_from_disk(tab)
+        elif box.clickedButton() == copy_button:
+            if not self._save_external_copy(tab):
+                self._keep_document_version(tab, path)
+        else:
+            self._keep_document_version(tab, path)
+
+    def _external_file_missing(self, path: str):
+        if self._closing_application:
+            return
+        tab = self._document_for_path(path)
+        if tab is None:
+            self._file_monitor.unwatch(path)
+            return
+        self.tabs.setCurrentWidget(tab)
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("File Missing")
+        box.setText(f'"{tab.display_name}" was moved or deleted outside the app.')
+        box.setInformativeText(
+            "You can keep the document open, save it elsewhere, or close the tab."
+        )
+        keep_button = box.addButton("Keep Open", QMessageBox.ButtonRole.AcceptRole)
+        copy_button = box.addButton("Save As…", QMessageBox.ButtonRole.ActionRole)
+        close_button = box.addButton("Close Tab", QMessageBox.ButtonRole.DestructiveRole)
+        box.setDefaultButton(keep_button)
+        box.exec()
+
+        if box.clickedButton() == copy_button:
+            if self._save_external_copy(tab):
+                return
+        elif box.clickedButton() == close_button:
+            self._file_monitor.unwatch(path)
+            self.close_tab(self.tabs.indexOf(tab))
+            return
+
+        self._file_monitor.unwatch(path)
+        tab.editor.document().setModified(True)
+        self._document_state_changed(tab)
+        self.statusBar().showMessage(
+            "The missing file is kept open as an unsaved document.", 5000
+        )
+
     def _document_state_changed(self, tab: DocumentTab):
         index = self.tabs.indexOf(tab)
         if index < 0:
@@ -951,7 +1152,6 @@ class MainWindow(QMainWindow):
             self.direction_actions[tab.editor.direction_mode].setChecked(True)
             if tab.encoding in self.encoding_actions:
                 self.encoding_actions[tab.encoding].setChecked(True)
-            self.preview_action.setChecked(tab.preview_active)
             self._document_state_changed(tab)
             tab.editor.setFocus()
         else:
@@ -1042,14 +1242,20 @@ class MainWindow(QMainWindow):
         tab = self.current_document()
         if tab:
             tab.editor.set_direction_mode(mode)
-            self.direction_actions[mode].setChecked(True)
-            self._update_status()
+            self._direction_chosen(tab, mode)
 
     def _editor_direction_changed(self, mode: str):
+        """The editor switched direction itself (Ctrl + left/right Shift)."""
         tab = self.current_document()
         if tab and self.sender() is tab.editor:
-            self.direction_actions[mode].setChecked(True)
-            self._update_status()
+            self._direction_chosen(tab, mode)
+
+    def _direction_chosen(self, tab: DocumentTab, mode: str):
+        self.direction_actions[mode].setChecked(True)
+        # Only a saved file has somewhere to remember the choice.
+        if tab.path:
+            note_index.set_direction(self._note_index, tab.path, mode)
+        self._update_status()
 
     def _transform_selected_lines(self, transform):
         """Apply a line transform to every line touched by the selection,
@@ -1177,12 +1383,13 @@ class MainWindow(QMainWindow):
         self._update_status()
 
     def _apply_editor_fonts(self):
-        family = self._cfg.get("font_family", "Vazirmatn")
+        latin = self._cfg.get("font_family_latin", "Inter")
+        persian = self._cfg.get("font_family_persian", "Vazirmatn")
         size = self._effective_font_size()
+        font = editor_font(latin, persian, size)
         for index in range(self.tabs.count()):
             tab = self.tabs.widget(index)
-            for widget in (tab.editor, tab.preview):
-                widget.setFont(editor_font(family, size))
+            tab.apply_font(font)
             tab.highlighter.rehighlight()
 
     def toggle_line_numbers(self, checked: bool):
@@ -1219,20 +1426,12 @@ class MainWindow(QMainWindow):
         settings_manager.save(self._cfg)
         self._apply_sidebar_side()
 
-    def toggle_preview(self):
-        tab = self.current_document()
-        if not tab:
-            return
-        active = tab.toggle_preview()
-        self.preview_action.setChecked(active)
-
     def _export_current(self, fmt: str):
         tab = self.current_document()
         if not tab:
             return
         filters = {
             "pdf": ("Export PDF", "PDF (*.pdf)", ".pdf"),
-            "docx": ("Export Word", "Word (*.docx)", ".docx"),
             "html": ("Export HTML", "HTML (*.html)", ".html"),
             "md": ("Export Markdown", "Markdown (*.md)", ".md"),
         }
@@ -1250,8 +1449,6 @@ class MainWindow(QMainWindow):
         try:
             if fmt == "pdf":
                 export_to_pdf(tab.text, path)
-            elif fmt == "docx":
-                export_to_docx(tab.text, path)
             elif fmt == "md":
                 write_text_file_atomic(path, tab.text, "utf-8")
             else:
@@ -1311,6 +1508,16 @@ class MainWindow(QMainWindow):
         )
 
     def _update_status(self):
+        """Queue a status-bar refresh.
+
+        Every keystroke reaches here twice — once for the text change and once
+        for the cursor move — and the refresh counts words over the whole
+        document. Collapsing both into a single deferred call halves that work
+        and keeps it off the keystroke itself.
+        """
+        self._status_timer.start()
+
+    def _refresh_status(self):
         tab = self.current_document()
         if not tab:
             return
@@ -1340,44 +1547,98 @@ class MainWindow(QMainWindow):
         self._cfg = settings_manager.add_recent_file(self._cfg, path)
 
     def _refresh_recent_menu(self):
+        """Build the Recent Files menu without touching the filesystem.
+
+        Probing each entry here froze the menu whenever one of them lived on a
+        disconnected network share or a removed USB drive. A path that has
+        gone away is dropped when opening it fails instead.
+        """
         self.recent_menu.clear()
-        existing = [
-            path for path in self._cfg.get("recent_files", []) if Path(path).exists()
-        ]
-        if existing != self._cfg.get("recent_files", []):
-            self._cfg["recent_files"] = existing
-            settings_manager.save(self._cfg)
-        if not existing:
+        recent = self._cfg.get("recent_files", [])
+        if not recent:
             empty = self.recent_menu.addAction("(empty)")
             empty.setEnabled(False)
             return
-        for position, path in enumerate(existing, start=1):
+        for position, path in enumerate(recent, start=1):
             action = self.recent_menu.addAction(f"&{position % 10}  {path}")
             action.triggered.connect(
-                lambda checked=False, selected=path: self.open_file(selected)
+                lambda checked=False, selected=path: self._open_recent(selected)
             )
         self.recent_menu.addSeparator()
         clear_action = self.recent_menu.addAction("Clear List")
         clear_action.triggered.connect(self._clear_recent)
+
+    def _open_recent(self, path: str):
+        """Open a recent entry, forgetting it when it is no longer there."""
+        if self.open_file(path):
+            return
+        remaining = [
+            item
+            for item in self._cfg.get("recent_files", [])
+            if os.path.normcase(item) != os.path.normcase(path)
+        ]
+        if remaining != self._cfg.get("recent_files", []):
+            self._cfg["recent_files"] = remaining
+            settings_manager.save(self._cfg)
 
     def _clear_recent(self):
         self._cfg["recent_files"] = []
         settings_manager.save(self._cfg)
 
     def _write_recoveries(self):
+        """Snapshot every unsaved tab — but only the ones that actually moved.
+
+        ``modified`` stays true from the first edit until the file is saved,
+        so without the fingerprint check this rewrote the full text of every
+        dirty tab to disk every ten seconds even when nothing had changed.
+        """
+        live_ids = set()
         for index in range(self.tabs.count()):
             tab = self.tabs.widget(index)
-            if tab.modified:
-                save_recovery(
-                    tab.recovery_id,
-                    text=tab.text,
-                    path=tab.path,
-                    encoding=tab.encoding,
-                    title=tab.display_name,
-                    direction_mode=tab.editor.direction_mode,
-                )
-            else:
-                remove_recovery(tab.recovery_id)
+            recovery_id = tab.recovery_id
+            live_ids.add(recovery_id)
+            if not tab.modified:
+                if recovery_id in self._recovery_on_disk:
+                    remove_recovery(recovery_id)
+                    self._recovery_on_disk.discard(recovery_id)
+                    self._recovery_marks.pop(recovery_id, None)
+                continue
+            text = tab.text
+            mark = (len(text), hash(text), tab.path, tab.encoding, tab.display_name)
+            if self._recovery_marks.get(recovery_id) == mark:
+                continue
+            save_recovery(
+                recovery_id,
+                text=text,
+                path=tab.path,
+                encoding=tab.encoding,
+                title=tab.display_name,
+                direction_mode=tab.editor.direction_mode,
+            )
+            self._recovery_marks[recovery_id] = mark
+            self._recovery_on_disk.add(recovery_id)
+        # Drop bookkeeping for tabs that have since been closed.
+        for stale in set(self._recovery_marks) - live_ids:
+            del self._recovery_marks[stale]
+        self._recovery_on_disk &= live_ids
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # Deferred by one event-loop turn so the window is painted and has
+        # focus before anything modal appears on top of it.
+        QTimer.singleShot(0, self._run_startup_prompts)
+
+    def _run_startup_prompts(self):
+        # Guarded here rather than in showEvent: showing the window again
+        # (restore, un-minimise, a second instance raising us) must never
+        # re-offer recovery and duplicate every recovered document.
+        if self._startup_prompts_shown or not self.isVisible():
+            return
+        self._startup_prompts_shown = True
+        self.raise_()
+        self.activateWindow()
+        self._offer_recovery()
+        QTimer.singleShot(250, self._offer_legacy_migration)
 
     def _offer_recovery(self) -> bool:
         recoveries = load_recoveries()
@@ -1394,18 +1655,24 @@ class MainWindow(QMainWindow):
         if answer != QMessageBox.StandardButton.Yes:
             clear_all_recoveries()
             return False
+        # The blank document created at startup makes way for the real ones.
+        placeholder = self._placeholder_tab()
         for item in recoveries:
             self._make_document(
                 text=item.get("text", ""),
                 path=item.get("path"),
                 encoding=item.get("encoding", "utf-8"),
                 recovery_id=item.get("id"),
-                direction_mode=item.get("direction_mode", "auto"),
+                direction_mode=item.get("direction_mode") or self._default_direction(),
                 title=f"{item.get('title', 'Untitled')} (recovered)",
             )
             tab = self.current_document()
             tab.editor.document().setModified(True)
+            # Its snapshot file already exists, so the timer must know it is
+            # there — otherwise saving the tab would leave the file behind.
+            self._recovery_on_disk.add(tab.recovery_id)
             self._document_state_changed(tab)
+        self._discard_placeholder(placeholder)
         return True
 
     def _offer_legacy_migration(self):

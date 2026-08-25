@@ -1,4 +1,7 @@
-PyQt6>=6.4.0
-pyinstaller>=5.0
-pytest>=8.0
-python-docx>=1.1.0
+# Pinned so a rebuild months from now produces the same executable.
+# Bump deliberately, then re-run the test suite and rebuild the installer.
+PyQt6==6.11.0
+
+# Build and test only — not imported by the application at runtime.
+pyinstaller==6.21.0
+pytest==9.1.0

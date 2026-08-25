@@ -1,9 +1,14 @@
 # PyInstaller spec file
 # Run: pyinstaller notepad.spec
 #
+# After changing the exclusion lists below, launch the built exe and check
+# PDF export and the single-instance handoff before shipping.
+#
 # onedir on purpose: onefile re-extracts all of PyQt6 into %TEMP% on every
 # launch (seconds of startup delay) and UPX both slows extraction and trips
 # antivirus heuristics. Keep both off.
+
+import os
 
 block_cipher = None
 
@@ -18,17 +23,71 @@ a = Analysis(
         'PyQt6.QtWidgets',
         'PyQt6.QtNetwork',
         'PyQt6.QtPrintSupport',
-        'docx',
-        'docx.oxml',
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    # Qt ships far more than a text editor uses, and PyInstaller bundles every
+    # module it can reach. None of these are imported anywhere in the app.
+    excludes=[
+        'PyQt6.QtQml',
+        'PyQt6.QtQuick',
+        'PyQt6.QtQuick3D',
+        'PyQt6.QtQuickWidgets',
+        'PyQt6.QtWebChannel',
+        'PyQt6.QtWebSockets',
+        'PyQt6.QtMultimedia',
+        'PyQt6.QtMultimediaWidgets',
+        'PyQt6.QtSql',
+        'PyQt6.QtTest',
+        'PyQt6.QtOpenGL',
+        'PyQt6.QtOpenGLWidgets',
+        'PyQt6.QtDBus',
+        'PyQt6.QtBluetooth',
+        'PyQt6.QtNfc',
+        'PyQt6.QtPositioning',
+        'PyQt6.QtSensors',
+        'PyQt6.QtSerialPort',
+        'PyQt6.QtDesigner',
+        'PyQt6.QtHelp',
+        'PyQt6.QtCharts',
+        'PyQt6.QtDataVisualization',
+        'PyQt6.QtSpatialAudio',
+        # QtPdf is the PDF *viewer* module. PDF export goes through
+        # QtPrintSupport and QPdfWriter in QtGui, so this is not it.
+        'PyQt6.QtPdf',
+        'PyQt6.QtPdfWidgets',
+        'tkinter',
+        'pytest',
+        'unittest',
+        'pydoc_data',
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
     noarchive=False,
+)
+
+# The `excludes` above only stop Python modules from being imported; the
+# PyQt6 hook still copies the whole Qt runtime, so the dead DLLs have to be
+# dropped from the collected binaries by hand. Each one below was confirmed
+# to have no importer among the Qt libraries the app actually loads.
+UNUSED_BINARIES = (
+    # Mesa's software OpenGL fallback, ~20 MB — a fifth of the whole build.
+    # Loaded only when a GPU driver is missing *and* something asks for GL;
+    # QtWidgets paints through the raster engine and never does.
+    'opengl32sw.dll',
+    # The PDF *viewer* module. Exporting goes through QPdfWriter in QtGui.
+    'qt6pdf.dll',
+    # OpenSSL, pulled in with QtNetwork. The only networking here is a local
+    # named pipe for the single-instance guard, which never negotiates TLS.
+    'libssl-3.dll',
+    'libcrypto-3.dll',
+)
+
+a.binaries = TOC(
+    entry for entry in a.binaries
+    if os.path.basename(entry[0]).lower() not in UNUSED_BINARIES
 )
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)

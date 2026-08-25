@@ -188,26 +188,6 @@ QTextEdit {{
     background: {t['window']};
     border: none;
 }}
-#codeBar {{
-    background: {t['surface_alt']};
-    border-bottom: 1px solid {t['border']};
-}}
-#codeLabel {{
-    color: {t['muted']};
-    font-family: 'Consolas', 'Cascadia Mono', monospace;
-}}
-#copyCodeButton {{
-    background: transparent;
-    color: {t['accent']};
-    border: 1px solid {t['border']};
-    border-radius: 7px;
-    padding: 4px 12px;
-}}
-#copyCodeButton:hover {{
-    background: {t['hover']};
-    border-color: {t['accent']};
-}}
-
 QStatusBar {{
     background: {t['surface']};
     color: {t['muted']};
@@ -322,29 +302,18 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
 #sidebarSearch {{
     background: {t['surface_alt']};
 }}
-#noteList {{
+#quickOpenList, #noteList {{
     background: transparent;
     border: none;
 }}
-#noteList::item {{
+#quickOpenList::item, #noteList::item {{
     padding: 8px 10px;
     border-radius: 6px;
     color: {t['text']};
 }}
-#noteList::item:hover {{ background: {t['hover']}; }}
-#noteList::item:selected {{
+#quickOpenList::item:hover, #noteList::item:hover {{ background: {t['hover']}; }}
+#quickOpenList::item:selected, #noteList::item:selected {{
     background: {t['hover']};
-    color: {t['accent']};
-}}
-#tagChip {{
-    background: {t['surface_alt']};
-    color: {t['muted']};
-    border: 1px solid {t['border']};
-    border-radius: 10px;
-    padding: 3px 10px;
-}}
-#tagChip:checked {{
-    border-color: {t['accent']};
     color: {t['accent']};
 }}
 """

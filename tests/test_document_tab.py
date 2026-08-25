@@ -3,34 +3,15 @@ from PyQt6.QtCore import Qt
 from ui.document_tab import DocumentTab
 
 
-def test_toggle_preview_swaps_visibility(qapp):
-    tab = DocumentTab(text="# Hello\n\nSome **bold** text.")
+def test_a_tab_is_just_an_editor(qapp):
+    """The Markdown preview and the code bar were removed in 3.1: the live
+    rendering already showed the formatting, and the bar flickered in and out
+    as the cursor moved."""
+    tab = DocumentTab(text="# Hello")
 
-    assert tab.preview_active is False
+    assert not hasattr(tab, "preview")
+    assert not hasattr(tab, "code_bar")
     assert tab.editor.isVisible() or not tab.isVisible()
-
-    active = tab.toggle_preview()
-    assert active is True
-    assert tab.preview_active is True
-    assert tab.preview.isHidden() is False
-    assert tab.editor.isHidden() is True
-    assert "Hello" in tab.preview.toPlainText()
-
-    active = tab.toggle_preview()
-    assert active is False
-    assert tab.preview_active is False
-    assert tab.editor.isHidden() is False
-    assert tab.preview.isHidden() is True
-
-
-def test_toggle_preview_hides_code_bar(qapp):
-    tab = DocumentTab(text="```\nprint('hi')\n```")
-    qapp.processEvents()
-    tab.code_bar.show()
-
-    tab.toggle_preview()
-
-    assert tab.code_bar.isHidden() is True
 
 
 def test_live_markdown_hides_heading_and_bold_tokens(qapp):

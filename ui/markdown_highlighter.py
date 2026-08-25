@@ -1,58 +1,30 @@
-"""Live, lightweight styling for Markdown structure and code blocks.
+"""Live, lightweight styling for Markdown structure.
 
-Headings get larger, bold and tinted with the accent color while their
-``#`` markers are visually hidden; ``**bold**`` spans render bold with hidden
-asterisks; list markers are painted by SmartEditor; and code lines get
-VSCode-style multi-language token colors from ``core.syntax``. The
-document text itself is never modified — only its rendering.
+Headings get larger and bold while their ``#`` markers are visually hidden;
+``**bold**`` spans render bold with hidden asterisks; list markers are
+painted by SmartEditor; and lines inside a ``` fence switch to a monospace
+face. The document text itself is never modified — only its rendering.
 """
 import re
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QFont, QSyntaxHighlighter, QTextCharFormat
 
-from core import syntax
 from core.formatting import BULLET_RE, HEADING_RE, NUMBERED_RE, TODO_RE
-from ui.styles import current_is_light, current_palette
+from ui.styles import current_palette
 
 HEADING_SCALE = {1: 1.5, 2: 1.3, 3: 1.15, 4: 1.08, 5: 1.04, 6: 1.0}
 HIDDEN_MARKER_SIZE = 1.0
 
+# Monospace chain for code lines. This is applied here rather than through an
+# ExtraSelection because the font changes line metrics: it has to reach every
+# code line in the document, not only the ones currently on screen, or text
+# would reflow as you scroll. The editor tints the visible ones separately.
+CODE_FONT_FAMILIES = ["Cascadia Mono", "Consolas", "Courier New"]
+
 # ``**bold**`` — no space right after the opening or before the closing
 # marker, matching how Markdown itself parses strong emphasis.
 BOLD_RE = re.compile(r"\*\*(?!\s)(.+?)(?<!\s)\*\*")
-
-# VSCode-inspired token palettes.
-CODE_DARK = {
-    syntax.KEYWORD: "#c586c0",
-    syntax.BUILTIN: "#569cd6",
-    syntax.STRING: "#ce9178",
-    syntax.COMMENT: "#6a9955",
-    syntax.NUMBER: "#b5cea8",
-    syntax.FUNCTION: "#dcdcaa",
-    syntax.CLASS: "#4ec9b0",
-    syntax.VARIABLE: "#9cdcfe",
-    syntax.TAG: "#569cd6",
-    syntax.ATTRIBUTE: "#9cdcfe",
-    syntax.PROPERTY: "#9cdcfe",
-    syntax.DECORATOR: "#dcdcaa",
-}
-
-CODE_LIGHT = {
-    syntax.KEYWORD: "#af00db",
-    syntax.BUILTIN: "#0000ff",
-    syntax.STRING: "#a31515",
-    syntax.COMMENT: "#008000",
-    syntax.NUMBER: "#098658",
-    syntax.FUNCTION: "#795e26",
-    syntax.CLASS: "#267f99",
-    syntax.VARIABLE: "#001080",
-    syntax.TAG: "#800000",
-    syntax.ATTRIBUTE: "#e50000",
-    syntax.PROPERTY: "#001080",
-    syntax.DECORATOR: "#795e26",
-}
-
 
 class MarkdownHighlighter(QSyntaxHighlighter):
     def __init__(self, editor):
@@ -65,10 +37,8 @@ class MarkdownHighlighter(QSyntaxHighlighter):
     def highlightBlock(self, text: str):
         block_number = self.currentBlock().blockNumber()
         if self._editor.line_is_code(block_number):
-            self._highlight_code(text, block_number)
+            self._highlight_code(text)
             return
-        # Non-code lines never leave a comment/string open for the next one.
-        self.setCurrentBlockState(syntax.STATE_NONE)
 
         colors = self._palette()
         base_size = self._editor.font().pointSizeF()
@@ -155,20 +125,13 @@ class MarkdownHighlighter(QSyntaxHighlighter):
                 marker.setFontPointSize(HIDDEN_MARKER_SIZE)
                 self.setFormat(marker_start, 2, marker)
 
-    def _highlight_code(self, text: str, block_number: int):
-        language = self._editor.code_language_for_line(block_number)
-        previous = self.previousBlockState()
-        state = previous if previous > 0 else syntax.STATE_NONE
-        # A state only carries over from another code line of the block.
-        if not self._editor.line_is_code(block_number - 1):
-            state = syntax.STATE_NONE
-        spans, next_state = syntax.highlight_line(text, language, state)
-        palette = CODE_LIGHT if current_is_light() else CODE_DARK
-        for start, length, kind in spans:
-            color = palette.get(kind)
-            if color is None:
-                continue
-            fmt = QTextCharFormat()
-            fmt.setForeground(QColor(color))
-            self.setFormat(start, length, fmt)
-        self.setCurrentBlockState(next_state)
+    def _highlight_code(self, text: str):
+        """Code lines get the monospace face — no token colouring.
+
+        The multi-language tokeniser it replaced cost ~50 regex scans per
+        block on every layout pass, and a note is not an IDE.
+        """
+        mono = QTextCharFormat()
+        mono.setFontFamilies(CODE_FONT_FAMILIES)
+        mono.setFontFixedPitch(True)
+        self.setFormat(0, len(text), mono)

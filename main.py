@@ -1,14 +1,18 @@
 import logging
 import os
 import sys
+import time
+
+_PROCESS_STARTED_AT = time.perf_counter()
 
 sys.path.insert(0, os.path.dirname(__file__))
 
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from PyQt6.QtWidgets import QApplication, QMessageBox
+from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QFont, QIcon
+from PyQt6.QtWidgets import QApplication, QMessageBox
 
 import core.settings_manager as sm
 from core.single_instance import SingleInstanceGuard
@@ -108,15 +112,24 @@ def main() -> int:
     settings = sm.load()
     app.setStyleSheet(build_stylesheet(settings.get("theme", "system")))
     ui_font = QFont()
-    # Inter has no Persian glyphs. Put Vazirmatn before Segoe UI so Persian
-    # labels (especially note titles in the sidebar) use the bundled typeface.
-    ui_font.setFamilies(["Inter", "Vazirmatn", "Segoe UI", "sans-serif"])
+    ui_font.setFamilies(sm.font_chain(settings, extra=("sans-serif",)))
     ui_font.setPointSize(10)
     app.setFont(ui_font)
 
     window = MainWindow(initial_files)
     guard.files_received.connect(window.open_from_another_instance)
     window.show()
+    # Logged from the event loop so it measures the moment the window is
+    # actually usable, not just the moment show() returned.
+    QTimer.singleShot(
+        0,
+        lambda: log.info(
+            "Startup ready in %.1f ms",
+            (time.perf_counter() - _PROCESS_STARTED_AT) * 1000,
+        ),
+    )
+    if "--smoke-test" in sys.argv:
+        QTimer.singleShot(0, app.quit)
     exit_code = app.exec()
     guard.release()
     return exit_code

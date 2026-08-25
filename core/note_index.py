@@ -13,18 +13,29 @@ def index_file() -> Path:
     return app_data_dir() / "notes_index.json"
 
 
+# Written by 2.6.0 and earlier. Tags and pins were removed in 3.0 — they had
+# to be maintained by hand, so in practice they never were — and folders in
+# the notes tree took over the job.
+_RETIRED_FIELDS = ("tags", "pinned")
+
+
 def load() -> dict:
     path = index_file()
     if not path.exists():
         return {}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
+    for entry in data.values():
+        if isinstance(entry, dict):
+            for field in _RETIRED_FIELDS:
+                entry.pop(field, None)
+    return data
 
 
 def save(index: dict):
-    """Best effort: losing a pin/tag update beats crashing the app, so a
+    """Best effort: losing a timestamp beats crashing the app, so a
     persistent lock on the index file is logged instead of raised."""
     path = index_file()
     tmp = path.with_suffix(".tmp")
@@ -48,7 +59,26 @@ def _normalize(path: str) -> str:
 
 def _entry(index: dict, path: str) -> dict:
     key = _normalize(path)
-    return index.setdefault(key, {"tags": [], "pinned": False, "last_opened": ""})
+    return index.setdefault(key, {"last_opened": ""})
+
+
+def set_direction(index: dict, path: str, mode: str) -> dict:
+    """Remember the text direction chosen for one file.
+
+    Documents default to right-to-left, so an English file only has to be
+    switched once — reopening it brings the choice back.
+    """
+    entry = _entry(index, path)
+    if entry.get("direction") != mode:
+        entry["direction"] = mode
+        save(index)
+    return index
+
+
+def direction_for(index: dict, path: str) -> str | None:
+    """The remembered direction for a file, or None when it has none."""
+    entry = index.get(_normalize(path))
+    return entry.get("direction") if entry else None
 
 
 def touch(index: dict, path: str) -> dict:
@@ -56,38 +86,6 @@ def touch(index: dict, path: str) -> dict:
     entry["last_opened"] = datetime.now(timezone.utc).isoformat()
     save(index)
     return index
-
-
-def set_pinned(index: dict, path: str, pinned: bool) -> dict:
-    entry = _entry(index, path)
-    entry["pinned"] = pinned
-    save(index)
-    return index
-
-
-def add_tag(index: dict, path: str, tag: str) -> dict:
-    tag = tag.strip()
-    if not tag:
-        return index
-    entry = _entry(index, path)
-    if tag not in entry["tags"]:
-        entry["tags"].append(tag)
-        save(index)
-    return index
-
-
-def remove_tag(index: dict, path: str, tag: str) -> dict:
-    key = _normalize(path)
-    entry = index.get(key)
-    if entry and tag in entry.get("tags", []):
-        entry["tags"].remove(tag)
-        save(index)
-    return index
-
-
-def all_tags(index: dict) -> list[str]:
-    tags = {tag for entry in index.values() for tag in entry.get("tags", [])}
-    return sorted(tags)
 
 
 def prune(index: dict, existing_paths: set[str]) -> dict:

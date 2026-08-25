@@ -1,6 +1,3 @@
-import re
-from dataclasses import dataclass
-
 from PyQt6.QtCore import QPoint, QPointF, QRect, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (
     QColor,
@@ -20,7 +17,6 @@ from core.list_editing import (
     parse_list_item,
 )
 from core.rtl_detector import detect_direction
-from core.syntax import detect_language, normalize_language
 from ui.styles import current_is_light, current_palette
 
 
@@ -38,11 +34,6 @@ class LineNumberArea(QWidget):
         self.editor.paint_line_number_area(event)
 
 
-# Above this character count the editor skips the heavy unfenced-code
-# heuristic so that typing never freezes on very large files. Fenced
-# ``` blocks and direction handling stay active.
-LARGE_FILE_THRESHOLD = 200_000
-
 # Marker layout. The checkbox is sized from the line height but clamped so it
 # stays a recognisable control at both small and large font sizes.
 MARKER_MIN_WIDTH = 10
@@ -55,216 +46,33 @@ CHECKBOX_MAX_SIZE = 17
 CHECKBOX_HIT_PADDING = 3
 
 
-@dataclass(frozen=True)
-class CodeBlock:
-    start_line: int
-    end_line: int
-    text: str
-    language: str = ""
-    fenced: bool = False
+def fenced_code_lines(text: str) -> set[int]:
+    """Line numbers inside ``` fenced blocks, the fence rows included.
 
-    def contains(self, line_number: int) -> bool:
-        return self.start_line <= line_number <= self.end_line
-
-
-def code_lines_of(blocks: list["CodeBlock"]) -> set[int]:
-    """Flatten code blocks into the set of line numbers they cover."""
-    return {
-        line_number
-        for block in blocks
-        for line_number in range(block.start_line, block.end_line + 1)
-    }
-
-
-_CODE_START = re.compile(
-    r"^\s*(?:"
-    r"def\s+\w+|class\s+\w+|async\s+def\s+\w+|"
-    r"from\s+\w+\s+import|import\s+[\w.]|"
-    r"function\s+&?\w*\s*\(|(?:const|let|var)\s+\w+|"
-    r"(?:if|for|foreach|while|switch|try|catch|elseif)\s*[\(\{]|"
-    r"(?:else|elif|try|except|finally|do)\s*:?\s*$|"
-    r"(?:return|raise|yield|await|print|echo|throw|die|exit)\b|"
-    r"console\.\w+\s*\(|"
-    r"(?:public|private|protected|static|abstract|final)\s+|"
-    r"#include\b|#define\b|SELECT\b|INSERT\b|UPDATE\b|DELETE\s+FROM\b|"
-    r"CREATE\s+(?:TABLE|INDEX|VIEW)\b|"
-    r"<\?(?:php|=)?|\?>|"
-    r"<[/!?]?[a-zA-Z][^>]*>?|"
-    r"\$\w+\s*(?:=|\[|->)|"
-    r"@[\w.]+\s*(?:\(.*\))?\s*$|"
-    r"[\w\"']+\s*:\s*(?:[\[{\d\"']|true\b|false\b|null\b)|"
-    r"\w+\s*=\s*(?:[\[{\d\"'(]|lambda\b|function\b|new\s|\w+\s*\()|"
-    r"[\w.\->:$\]]+\s*\(.*\)\s*[;,{]?\s*$|"
-    r"[\}\]\)]\s*[,;]?\s*$|"
-    r"[.#]?[\w-]+(?:\s*[,>+~]\s*[.#]?[\w-]+)*\s*\{\s*$"
-    r")",
-    re.IGNORECASE,
-)
-
-# Strong RTL characters mean prose, never code.
-_RTL_CHAR_RE = re.compile(r"[֐-ࣿיִ-﷽ﹰ-ﻼ]")
-
-# First word of a line that is SQL even without any symbol on it.
-_SQL_WORDS = {
-    "select", "from", "where", "insert", "update", "delete", "join",
-    "inner", "left", "right", "group", "order", "having", "union",
-    "values", "create", "alter", "drop", "and", "or", "on", "set",
-}
-
-
-def detect_code_blocks(text: str, heuristic: bool = True) -> list[CodeBlock]:
-    """Find code blocks in ``text``.
-
-    Fenced ``` blocks are always detected. The heavier heuristic that spots
-    unfenced code is skipped when ``heuristic`` is False (used for very large
-    files to keep typing responsive).
+    Only explicit fences count. Earlier versions also *guessed* at unfenced
+    code with a pile of regexes; that ran over the whole document on every
+    keystroke and, worse, misread ordinary Persian prose as code and forced
+    it left-to-right. If you want a block, mark it with ```.
     """
     lines = text.splitlines()
-    blocks: list[CodeBlock] = []
-    fenced_start = None
-    fenced_language = ""
-
+    inside: set[int] = set()
+    start = None
     for index, line in enumerate(lines):
-        stripped = line.strip()
-        if stripped.startswith("```"):
-            if fenced_start is None:
-                fenced_start = index
-                fenced_language = stripped[3:].strip()
+        if line.strip().startswith("```"):
+            if start is None:
+                start = index
             else:
-                content = "\n".join(lines[fenced_start + 1:index])
-                blocks.append(
-                    CodeBlock(
-                        fenced_start,
-                        index,
-                        content,
-                        fenced_language,
-                        fenced=True,
-                    )
-                )
-                fenced_start = None
-                fenced_language = ""
-
-    if fenced_start is not None:
-        blocks.append(
-            CodeBlock(
-                fenced_start,
-                max(fenced_start, len(lines) - 1),
-                "\n".join(lines[fenced_start + 1:]),
-                fenced_language,
-                fenced=True,
-            )
-        )
-
-    for position, block in enumerate(blocks):
-        if block.fenced and not block.language:
-            detected = detect_language(block.text)
-            if detected:
-                blocks[position] = CodeBlock(
-                    block.start_line, block.end_line, block.text,
-                    detected, fenced=True,
-                )
-
-    if not heuristic:
-        return sorted(blocks, key=lambda block: block.start_line)
-
-    fenced_lines = code_lines_of(blocks)
-    index = 0
-    while index < len(lines):
-        if index in fenced_lines or not _looks_like_code(lines[index]):
-            index += 1
-            continue
-        start = index
-        index += 1
-        while index < len(lines) and index not in fenced_lines:
-            line = lines[index]
-            if _looks_like_code(line) or _continues_code(line):
-                index += 1
-                continue
-            if not line.strip():
-                # Blank gaps stay inside the block as long as code resumes
-                # within a couple of lines (blank lines are common in code).
-                lookahead = index + 1
-                while (
-                    lookahead < len(lines)
-                    and lookahead - index <= 2
-                    and not lines[lookahead].strip()
-                ):
-                    lookahead += 1
-                if (
-                    lookahead < len(lines)
-                    and lookahead not in fenced_lines
-                    and _looks_like_code(lines[lookahead])
-                ):
-                    index = lookahead + 1
-                    continue
-            break
-        end = index - 1
-        while end > start and not lines[end].strip():
-            end -= 1
-        content = "\n".join(lines[start:end + 1])
-        blocks.append(
-            CodeBlock(start, end, content, detect_language(content))
-        )
-
-    return sorted(blocks, key=lambda block: block.start_line)
-
-
-def _is_prose(line: str) -> bool:
-    """A line that clearly reads as natural text, never code."""
-    stripped = line.strip()
-    if not stripped:
-        return False
-    if _RTL_CHAR_RE.search(stripped):
-        return True
-    words = re.findall(r"[A-Za-z']+", stripped)
-    if len(words) < 4:
-        return False
-    if words[0].lower() in _SQL_WORDS:
-        return False
-    # Several words and none of the punctuation code lives on.
-    return not re.search(r"[;{}=<>$@#\\]|\(\)|\[|->|::|\w\(", stripped)
-
-
-def _looks_like_code(line: str) -> bool:
-    stripped = line.strip()
-    if not stripped:
-        return False
-    if _is_prose(line):
-        return False
-    if _CODE_START.search(line):
-        return True
-    if stripped.endswith((";", "{", "}", "=>", "*/")):
-        return True
-    if stripped.startswith(("/*", "*/", "//")):
-        return True
-    return bool(
-        re.search(r"(?:==|!=|<=|>=|&&|\|\||->|::|\+=|-=|\*=|/=|=>)", stripped)
-    )
-
-
-def _continues_code(line: str) -> bool:
-    """Whether a line that doesn't *start* a block may still belong to one.
-
-    Keeps indented continuation lines, lone brackets and short symbol
-    lines inside the block so real-world code isn't chopped into pieces.
-    """
-    stripped = line.strip()
-    if not stripped or _is_prose(line):
-        return False
-    if line[0] in " \t":
-        return True
-    if len(stripped) <= 3:
-        return True
-    first_word = re.match(r"[A-Za-z]+", stripped)
-    if first_word and first_word.group().lower() in _SQL_WORDS:
-        return True
-    return bool(re.search(r"[(){}\[\];=$<>]", stripped))
+                inside.update(range(start, index + 1))
+                start = None
+    if start is not None:
+        # An unclosed fence runs to the end of the document.
+        inside.update(range(start, len(lines)))
+    return inside
 
 
 class SmartEditor(QTextEdit):
     """Plain-text editor with line numbers and paragraph-level bidi direction."""
 
-    code_block_changed = pyqtSignal(object)
     zoom_requested = pyqtSignal(int)
     direction_changed = pyqtSignal(str)
 
@@ -278,13 +86,18 @@ class SmartEditor(QTextEdit):
         self.setAcceptRichText(False)
         self.direction_mode = "auto"
         self._formatting = False
-        self._code_blocks: list[CodeBlock] = []
         self._code_line_set: set[int] = set()
-        self._code_line_language: dict[int, str] = {}
         self._line_numbers_visible = True
         self.markdown_highlighter = None
         self._hovered_checkbox_block: int | None = None
         self._marker_cache: list | None = None
+        # Paragraphs touched since the last layout pass. Only these need their
+        # direction re-applied; every other block already carries the right
+        # format, and Qt keeps that format attached to the block itself rather
+        # than to its number. An empty range means "nothing to do".
+        self._dirty_first = 0
+        self._dirty_last = -1
+        self._needs_full_pass = True
         self._line_area = LineNumberArea(self)
         self.viewport().setMouseTracking(True)
         # A single debounced pass scans the text once and updates both the
@@ -293,8 +106,12 @@ class SmartEditor(QTextEdit):
         self._refresh_timer.timeout.connect(self._refresh_layout)
 
         self.document().blockCountChanged.connect(self._update_line_area_width)
+        self.document().contentsChange.connect(self._note_contents_change)
         self.verticalScrollBar().valueChanged.connect(self._line_area.update)
         self.horizontalScrollBar().valueChanged.connect(self._line_area.update)
+        # The code background is a paint-only decoration, so it is rebuilt for
+        # the visible lines alone and refreshed whenever the viewport moves.
+        self.verticalScrollBar().valueChanged.connect(self._update_code_backgrounds)
         self.textChanged.connect(self._schedule_refresh)
         self.textChanged.connect(self._line_area.update)
         self.cursorPositionChanged.connect(self._cursor_context_changed)
@@ -327,6 +144,8 @@ class SmartEditor(QTextEdit):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._invalidate_marker_cache()
+        # A taller viewport can expose code lines that had no tint yet.
+        self._update_code_backgrounds()
         content = self.contentsRect()
         width = self.line_number_area_width()
         self._line_area.setGeometry(
@@ -378,8 +197,32 @@ class SmartEditor(QTextEdit):
         if mode not in {"auto", "rtl", "ltr"}:
             return
         self.direction_mode = mode
+        # Every paragraph is affected, not just the edited ones.
+        self._needs_full_pass = True
         self.apply_directions()
         self.direction_changed.emit(mode)
+
+    def _note_contents_change(self, position: int, removed: int, added: int):
+        """Remember which paragraphs an edit touched.
+
+        Ignored while we are applying our own block formats: those blocks are
+        already being handled by the pass that triggered them.
+        """
+        if self._formatting:
+            return
+        document = self.document()
+        # The signal fires *after* the edit, so only ``added`` still maps to
+        # live text — ``removed`` counts characters that no longer exist and
+        # would run the end position past the document, where findBlock
+        # returns an invalid block whose number is -1.
+        limit = max(0, document.characterCount() - 1)
+        first = document.findBlock(min(position, limit)).blockNumber()
+        last = document.findBlock(min(position + added, limit)).blockNumber()
+        if self._dirty_last < self._dirty_first:
+            self._dirty_first, self._dirty_last = first, last
+        else:
+            self._dirty_first = min(self._dirty_first, first)
+            self._dirty_last = max(self._dirty_last, last)
 
     def _schedule_refresh(self):
         if not self._formatting:
@@ -387,8 +230,11 @@ class SmartEditor(QTextEdit):
 
     def _refresh_layout(self):
         """Single pass: scan code blocks once, then reuse for directions."""
-        self.refresh_code_blocks()
-        self.apply_directions()
+        # A change to which lines are code can flip the direction of a
+        # paragraph far away from the edit (typing ``` opens a fence over the
+        # rest of the file), so that case still needs the whole document.
+        code_changed = self.refresh_code_blocks()
+        self.apply_directions(only_dirty=not code_changed)
 
     def _direction_for_text(self, text: str, is_code: bool = False) -> str:
         # Code is always LTR, even when the user forces the document RTL —
@@ -449,22 +295,39 @@ class SmartEditor(QTextEdit):
         cursor.setBlockFormat(fmt)
         return True
 
-    def apply_directions(self):
+    def apply_directions(self, only_dirty: bool = False):
+        """Re-apply per-paragraph direction.
+
+        By default every paragraph is visited. ``only_dirty`` restricts the
+        pass to the paragraphs an edit actually touched, which is what makes
+        typing in a large document independent of its size.
+        """
         if self._formatting:
             return
-        self._formatting = True
         document = self.document()
+        partial = only_dirty and not self._needs_full_pass
+        if partial:
+            first = max(0, self._dirty_first)
+            last = min(self._dirty_last, document.blockCount() - 1)
+            if last < first:
+                self._dirty_first, self._dirty_last = 0, -1
+                return
+        else:
+            first, last = 0, document.blockCount() - 1
+
+        self._formatting = True
         was_modified = document.isModified()
-        # Reuse the already-computed code blocks rather than rescanning.
-        code_lines = code_lines_of(self._code_blocks)
+        # Reuse the line set computed by refresh_code_blocks rather than
+        # flattening the blocks again.
+        code_lines = self._code_line_set
         # One edit block so the whole pass is a single undo command, which
         # the undo/redo overrides below can then skip over transparently.
         changed = False
         guard = QTextCursor(document)
         guard.beginEditBlock()
         try:
-            block = document.begin()
-            while block.isValid():
+            block = document.findBlockByNumber(first)
+            while block.isValid() and block.blockNumber() <= last:
                 cursor = QTextCursor(block)
                 changed |= self._apply_block_direction(
                     cursor,
@@ -477,10 +340,21 @@ class SmartEditor(QTextEdit):
             guard.endEditBlock()
             document.setModified(was_modified)
             self._formatting = False
-        # Relayouting the whole document is expensive on large files; skip it
-        # on the common typing path where no paragraph changed direction.
+            self._dirty_first, self._dirty_last = 0, -1
+            self._needs_full_pass = False
+        # Relayouting is expensive on large files, so it is skipped entirely on
+        # the common typing path where no paragraph changed direction — and
+        # confined to the paragraphs actually visited when one did.
         if changed:
-            document.markContentsDirty(0, document.characterCount())
+            start_block = document.findBlockByNumber(first)
+            end_block = document.findBlockByNumber(last)
+            if start_block.isValid() and end_block.isValid():
+                start = start_block.position()
+                document.markContentsDirty(
+                    start, end_block.position() + end_block.length() - start
+                )
+            else:
+                document.markContentsDirty(0, document.characterCount())
             self.viewport().update()
 
     # Undo/redo that skip invisible auto-format passes. Qt records the
@@ -504,7 +378,6 @@ class SmartEditor(QTextEdit):
 
     def _cursor_context_changed(self):
         self._ensure_current_empty_block_direction()
-        self.code_block_changed.emit(self.current_code_block())
         self._line_area.update()
 
     def _ensure_current_empty_block_direction(self):
@@ -529,40 +402,50 @@ class SmartEditor(QTextEdit):
     def line_is_code(self, line_number: int) -> bool:
         return line_number in self._code_line_set
 
-    def code_language_for_line(self, line_number: int) -> str:
-        """Normalized language id of the code block covering this line."""
-        return self._code_line_language.get(line_number, "")
+    def refresh_code_blocks(self, text: str | None = None) -> bool:
+        """Rescan for ``` fenced blocks.
 
-    def refresh_code_blocks(self):
-        text = self.toPlainText()
-        self._code_blocks = detect_code_blocks(
-            text, heuristic=len(text) <= LARGE_FILE_THRESHOLD
-        )
-        new_code_lines = code_lines_of(self._code_blocks)
-        new_languages = {
-            line_number: normalize_language(code_block.language)
-            for code_block in self._code_blocks
-            for line_number in range(
-                code_block.start_line, code_block.end_line + 1
-            )
-        }
-        code_lines_changed = (
-            new_code_lines != self._code_line_set
-            or new_languages != self._code_line_language
-        )
+        Returns whether the set of code lines changed — the caller uses that
+        to decide if paragraphs outside the edit need re-evaluating, since a
+        fence flips everything after it.
+        """
+        if text is None:
+            text = self.toPlainText()
+        new_code_lines = fenced_code_lines(text)
+        changed = new_code_lines != self._code_line_set
         self._code_line_set = new_code_lines
-        self._code_line_language = new_languages
-        selections: list[QTextEdit.ExtraSelection] = []
-        document = self.document()
+        self._update_code_backgrounds()
+        if changed and self.markdown_highlighter is not None:
+            was_formatting = self._formatting
+            self._formatting = True
+            try:
+                self.markdown_highlighter.rehighlight()
+            finally:
+                self._formatting = was_formatting
+        return changed
 
+    def _update_code_backgrounds(self):
+        """Tint the code lines currently on screen.
+
+        This is a paint-only decoration — the monospace font that actually
+        affects layout is applied per block by MarkdownHighlighter, so
+        restricting the tint to the viewport is safe and keeps the cost
+        proportional to the window rather than to the file.
+        """
+        if not self._code_line_set:
+            if self.extraSelections():
+                self.setExtraSelections([])
+            return
+
+        document = self.document()
         background = QColor("#eef2f9" if current_is_light() else "#2a2b36")
-        # No foreground here: the syntax highlighter colors the tokens and
-        # an ExtraSelection foreground would paint over all of them.
-        for code_block in self._code_blocks:
-            for line_number in range(code_block.start_line, code_block.end_line + 1):
-                block = document.findBlockByNumber(line_number)
-                if not block.isValid():
-                    continue
+        viewport_bottom = self.viewport().height()
+        selections: list[QTextEdit.ExtraSelection] = []
+        block = self.cursorForPosition(QPoint(0, 0)).block()
+        while block.isValid():
+            if self.cursorRect(QTextCursor(block)).top() > viewport_bottom:
+                break
+            if block.isVisible() and block.blockNumber() in self._code_line_set:
                 selection = QTextEdit.ExtraSelection()
                 selection.cursor = QTextCursor(block)
                 selection.cursor.clearSelection()
@@ -570,26 +453,9 @@ class SmartEditor(QTextEdit):
                     QTextFormat.Property.FullWidthSelection, True
                 )
                 selection.format.setBackground(background)
-                selection.format.setFontFamilies(["Consolas", "Cascadia Mono"])
-                selection.format.setFontFixedPitch(True)
                 selections.append(selection)
-
+            block = block.next()
         self.setExtraSelections(selections)
-        if code_lines_changed and self.markdown_highlighter is not None:
-            was_formatting = self._formatting
-            self._formatting = True
-            try:
-                self.markdown_highlighter.rehighlight()
-            finally:
-                self._formatting = was_formatting
-        self.code_block_changed.emit(self.current_code_block())
-
-    def current_code_block(self) -> CodeBlock | None:
-        line_number = self.textCursor().blockNumber()
-        return next(
-            (block for block in self._code_blocks if block.contains(line_number)),
-            None,
-        )
 
     @classmethod
     def direction_for_shift_scancode(cls, scan_code: int) -> str | None:
@@ -1064,5 +930,8 @@ class SmartEditor(QTextEdit):
 
     def setPlainText(self, text: str):
         super().setPlainText(text)
-        self.refresh_code_blocks()
+        # Loading a document replaces everything, so nothing carries over from
+        # the previous content and the first pass must visit every paragraph.
+        self._needs_full_pass = True
+        self.refresh_code_blocks(text)
         self.apply_directions()

@@ -24,7 +24,11 @@ DEFAULT_SAVE_DIR = str(_documents_dir() / "Notepad")
 _LEGACY_SAVE_DIR = r"C:\Notepad"
 
 DEFAULTS = {
-    "font_family": "Inter",
+    # Latin and Persian are chosen separately: one family rarely does both
+    # well, and tying them together meant picking a good English face cost
+    # you the Persian one. The editor builds a fallback chain from the pair.
+    "font_family_latin": "Inter",
+    "font_family_persian": "Vazirmatn",
     "font_size": 14,
     "theme": "system",
     "word_wrap": True,
@@ -37,7 +41,33 @@ DEFAULTS = {
     "splitter_state": "",
     "default_save_dir": DEFAULT_SAVE_DIR,
     "show_line_numbers": True,
+    # Documents open right-to-left. "auto" decides per paragraph, which reads
+    # as the document jumping sides while you write; "rtl" keeps the whole
+    # document on one side until you say otherwise. Code blocks stay LTR
+    # either way, and a per-file override is remembered in the note index.
+    "default_direction": "rtl",
 }
+
+DIRECTION_MODES = ("rtl", "ltr", "auto")
+
+
+def font_chain(settings: dict, *, extra: tuple[str, ...] = ()) -> list[str]:
+    """Family fallback list for both scripts, most specific first.
+
+    Qt resolves families per character, so the Latin choice leads and the
+    Persian one picks up everything it lacks a glyph for. Segoe UI trails
+    both on purpose: it *does* carry Arabic glyphs, so putting it earlier
+    would quietly win Persian text away from the chosen Persian family.
+    """
+    families = [
+        settings.get("font_family_latin") or DEFAULTS["font_family_latin"],
+        settings.get("font_family_persian") or DEFAULTS["font_family_persian"],
+        DEFAULTS["font_family_persian"],
+        "Segoe UI",
+        *extra,
+    ]
+    # Keep the first occurrence of each, drop blanks.
+    return list(dict.fromkeys(name for name in families if name))
 
 
 def resolve_save_dir(settings: dict) -> Path:
@@ -89,16 +119,25 @@ def load() -> dict:
     except (OSError, json.JSONDecodeError):
         return dict(DEFAULTS)
     merged = {**DEFAULTS, **data}
-    # Old default migration: Vazirmatn stays the Persian fallback either
-    # way, so switching the primary family to Inter only upgrades how
-    # Latin text renders — exactly what the new default is for.
-    if merged.get("font_family") == "Vazirmatn":
-        merged["font_family"] = "Inter"
+    # Pre-2.7.0 stored a single "font_family" that fronted a fixed fallback
+    # chain. Carry it over as the Latin choice — Persian always came from
+    # Vazirmatn behind it, which is exactly the new default for that half.
+    legacy_family = merged.pop("font_family", None)
+    if legacy_family and "font_family_latin" not in data:
+        # "Vazirmatn" as the primary was the pre-2.4.0 default, and it only
+        # ever affected Latin text; the 2.4.0 upgrade to Inter still applies.
+        merged["font_family_latin"] = (
+            DEFAULTS["font_family_latin"]
+            if legacy_family == "Vazirmatn"
+            else legacy_family
+        )
     # Old default migration: users who never picked a folder themselves move
     # from C:\Notepad to the Documents default. A custom choice is kept as-is.
     stored_dir = str(merged.get("default_save_dir") or "")
     if os.path.normcase(stored_dir) == os.path.normcase(_LEGACY_SAVE_DIR):
         merged["default_save_dir"] = DEFAULT_SAVE_DIR
+    if merged.get("default_direction") not in DIRECTION_MODES:
+        merged["default_direction"] = DEFAULTS["default_direction"]
     return merged
 
 

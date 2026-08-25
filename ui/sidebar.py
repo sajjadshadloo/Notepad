@@ -7,19 +7,18 @@ from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QLineEdit,
-    QListWidget,
-    QListWidgetItem,
-    QMenu,
     QPushButton,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
 import core.note_index as note_index
 from core.rtl_detector import detect_direction
+from core.settings_manager import font_chain
 from core.search_service import search_notes
 
 NOTE_EXTENSIONS = (".txt", ".md", ".markdown")
@@ -42,22 +41,28 @@ class Sidebar(QWidget):
     note_activated = pyqtSignal(str)
     root_changed = pyqtSignal(str)
 
-    def __init__(self, root: str, index: dict | None = None, parent=None):
+    def __init__(
+        self,
+        root: str,
+        index: dict | None = None,
+        parent=None,
+        font_families: list[str] | None = None,
+    ):
         super().__init__(parent)
         self.setObjectName("sidebar")
         self.root = root
         # The main window shares its index dict so both always see the same
-        # pins/tags/timestamps and never overwrite each other's saves.
+        # timestamps and never overwrite each other's saves.
         self._index = note_index.load() if index is None else index
-        self._active_tags: set[str] = set()
         self._search_worker: _SearchWorker | None = None
         self._needs_refresh = True
 
-        # Match the application's intended Latin/Persian font chain. Segoe UI
-        # contains Arabic glyphs, so placing it before Vazirmatn silently made
-        # Persian note titles use the wrong face.
+        # Match the application's Latin/Persian font chain. Segoe UI contains
+        # Arabic glyphs, so placing it before the Persian family silently made
+        # Persian note titles use the wrong face. Rows need the font set on
+        # the item itself, so the widget font has to carry the full chain.
         sidebar_font = QFont(self.font())
-        sidebar_font.setFamilies(["Inter", "Vazirmatn", "Segoe UI"])
+        sidebar_font.setFamilies(font_families or font_chain({}))
         self.setFont(sidebar_font)
 
         layout = QVBoxLayout(self)
@@ -86,17 +91,15 @@ class Sidebar(QWidget):
         self._search_debounce.setInterval(300)
         self._search_debounce.timeout.connect(self._run_search)
 
-        self.tag_row = QHBoxLayout()
-        self.tag_row.setSpacing(4)
-        layout.addLayout(self.tag_row)
-
-        self.note_list = QListWidget()
+        # A tree, not a list: subfolders are how notes get organised, and a
+        # flat rglob hid that structure entirely.
+        self.note_list = QTreeWidget()
         self.note_list.setObjectName("noteList")
+        self.note_list.setHeaderHidden(True)
+        self.note_list.setIndentation(12)
         # Single click opens a note; itemActivated keeps Enter working too.
         self.note_list.itemClicked.connect(self._activate_item)
         self.note_list.itemActivated.connect(self._activate_item)
-        self.note_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.note_list.customContextMenuRequested.connect(self._show_context_menu)
         layout.addWidget(self.note_list, 1)
 
     def _short_root(self) -> str:
@@ -126,13 +129,14 @@ class Sidebar(QWidget):
             Qt.AlignmentFlag.AlignRight if rtl else Qt.AlignmentFlag.AlignLeft
         )
 
-    def _style_note_item(self, item: QListWidgetItem, direction_text: str):
+    def _style_note_item(self, item: QTreeWidgetItem, direction_text: str):
         """Apply the correct font fallback and alignment to one note row."""
-        item.setFont(self.font())
+        item.setFont(0, self.font())
         rtl = self._is_rtl(direction_text)
         item.setTextAlignment(
+            0,
             (Qt.AlignmentFlag.AlignRight if rtl else Qt.AlignmentFlag.AlignLeft)
-            | Qt.AlignmentFlag.AlignVCenter
+            | Qt.AlignmentFlag.AlignVCenter,
         )
 
     def choose_root(self):
@@ -170,11 +174,11 @@ class Sidebar(QWidget):
                 label = name
             else:
                 label = f"{name} · {result.snippet}"
-            item = QListWidgetItem(label)
-            item.setData(Qt.ItemDataRole.UserRole, result.path)
-            item.setToolTip(result.path)
+            item = QTreeWidgetItem([label])
+            item.setData(0, Qt.ItemDataRole.UserRole, result.path)
+            item.setToolTip(0, result.path)
             self._style_note_item(item, name)
-            self.note_list.addItem(item)
+            self.note_list.addTopLevelItem(item)
 
     def refresh(self):
         """Rescan the notes folder — but only while the sidebar is visible.
@@ -195,63 +199,62 @@ class Sidebar(QWidget):
             if p.is_file() and p.suffix.lower() in NOTE_EXTENSIONS
         ]
         self._index = note_index.prune(self._index, set(files))
-        self._rebuild_tag_row()
         self._rebuild_note_list(files)
 
-    def _rebuild_tag_row(self):
-        while self.tag_row.count():
-            item = self.tag_row.takeAt(0)
-            widget = item.widget()
-            if widget:
-                widget.deleteLater()
-        for tag in note_index.all_tags(self._index):
-            chip = QPushButton(tag)
-            chip.setObjectName("tagChip")
-            chip.setCheckable(True)
-            chip.setChecked(tag in self._active_tags)
-            chip.toggled.connect(lambda checked, t=tag: self._toggle_tag(t, checked))
-            self.tag_row.addWidget(chip)
-        self.tag_row.addStretch()
-
-    def _toggle_tag(self, tag: str, checked: bool):
-        if checked:
-            self._active_tags.add(tag)
-        else:
-            self._active_tags.discard(tag)
-        self.refresh()
-
     def _rebuild_note_list(self, files: list[str]):
+        """Group notes under the folder they live in.
+
+        Files sitting loose in the notes root stay at the top level; every
+        subfolder becomes a collapsible parent, so the tree mirrors what
+        Explorer shows instead of flattening it all into one list.
+        """
         self.note_list.clear()
+        # Resolve the root the same way the file paths were resolved, or
+        # relative_to() fails on every one of them — the stored root can be
+        # "C:/Users/.../Notepad" while the scan yields "C:\Users\...".
+        root_path = Path(self.root).resolve()
 
-        def sort_key(path: str):
-            entry = self._index.get(path, {})
-            pinned_rank = 0 if entry.get("pinned", False) else 1
-            return (pinned_rank, entry.get("last_opened", "") or "0")
+        def last_opened(path: str) -> str:
+            return self._index.get(path, {}).get("last_opened", "") or "0"
 
-        visible = []
+        loose: list[str] = []
+        by_folder: dict[str, list[str]] = {}
         for path in files:
-            entry = self._index.get(path, {})
-            tags = entry.get("tags", [])
-            if self._active_tags and not self._active_tags.issubset(set(tags)):
+            try:
+                relative = Path(path).relative_to(root_path)
+            except ValueError:
+                loose.append(path)
                 continue
-            visible.append(path)
+            folder = relative.parent.as_posix()
+            if folder in (".", ""):
+                loose.append(path)
+            else:
+                by_folder.setdefault(folder, []).append(path)
 
-        visible.sort(key=lambda p: sort_key(p)[1], reverse=True)
-        visible.sort(key=lambda p: sort_key(p)[0])
+        # Most recently opened first, within the root and within each folder.
+        for path in sorted(loose, key=last_opened, reverse=True):
+            self.note_list.addTopLevelItem(self._note_item(path))
 
-        for path in visible:
-            entry = self._index.get(path, {})
-            tags = entry.get("tags", [])
-            pin_glyph = "📌 " if entry.get("pinned") else ""
-            tag_suffix = f"  [{', '.join(tags)}]" if tags else ""
-            date_label = self._format_date(path, entry)
-            item = QListWidgetItem(
-                f"{pin_glyph}{Path(path).name}{tag_suffix}\n{date_label}"
-            )
-            item.setData(Qt.ItemDataRole.UserRole, path)
-            item.setToolTip(path)
-            self._style_note_item(item, Path(path).name)
-            self.note_list.addItem(item)
+        for folder in sorted(by_folder):
+            parent = QTreeWidgetItem([f"📁 {folder}"])
+            parent.setFirstColumnSpanned(True)
+            self._style_note_item(parent, folder)
+            for path in sorted(by_folder[folder], key=last_opened, reverse=True):
+                parent.addChild(self._note_item(path))
+            self.note_list.addTopLevelItem(parent)
+            parent.setExpanded(True)
+
+    def _note_item(self, path: str) -> QTreeWidgetItem:
+        entry = self._index.get(path, {})
+        name = Path(path).name
+        item = QTreeWidgetItem([name])
+        item.setData(0, Qt.ItemDataRole.UserRole, path)
+        # One line per note keeps the tree scannable; the timestamp is
+        # detail you want on demand, not on every row.
+        date = self._format_date(path, entry)
+        item.setToolTip(0, path + ((chr(10) + date) if date else ''))
+        self._style_note_item(item, name)
+        return item
 
     @staticmethod
     def _format_date(path: str, entry: dict) -> str:
@@ -283,36 +286,10 @@ class Sidebar(QWidget):
         if self._needs_refresh:
             self.refresh()
 
-    def _activate_item(self, item: QListWidgetItem):
-        path = item.data(Qt.ItemDataRole.UserRole)
+    def _activate_item(self, item: QTreeWidgetItem):
+        path = item.data(0, Qt.ItemDataRole.UserRole)
         if path:
             self.note_activated.emit(path)
-
-    def _show_context_menu(self, position):
-        item = self.note_list.itemAt(position)
-        if not item:
-            return
-        path = item.data(Qt.ItemDataRole.UserRole)
-        entry = self._index.get(path, {})
-        menu = QMenu(self)
-        pin_label = "Unpin" if entry.get("pinned") else "Pin"
-        pin_action = menu.addAction(pin_label)
-        add_tag_action = menu.addAction("Add Tag…")
-        remove_tag_menu = None
-        if entry.get("tags"):
-            remove_tag_menu = menu.addMenu("Remove Tag")
-            for tag in entry["tags"]:
-                action = remove_tag_menu.addAction(tag)
-                action.setData(tag)
-        selected = menu.exec(self.note_list.mapToGlobal(position))
-        if selected == pin_action:
-            note_index.set_pinned(self._index, path, not entry.get("pinned", False))
-            self.refresh()
-        elif selected == add_tag_action:
-            tag, accepted = QInputDialog.getText(self, "Add Tag", "Tag name:")
-            if accepted and tag.strip():
-                note_index.add_tag(self._index, path, tag.strip())
-                self.refresh()
-        elif remove_tag_menu and selected and selected.parentWidget() is remove_tag_menu:
-            note_index.remove_tag(self._index, path, selected.data())
-            self.refresh()
+        else:
+            # A folder row: toggle it instead of pretending to open something.
+            item.setExpanded(not item.isExpanded())
