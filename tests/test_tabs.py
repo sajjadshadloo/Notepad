@@ -69,6 +69,10 @@ def test_saved_document_rename_changes_real_file(qapp, tmp_path, monkeypatch):
     assert destination.read_text(encoding="utf-8") == "hello"
     assert window.current_document().path == str(destination.resolve())
     assert window.current_document().display_name == "new-title.txt"
+    # Renaming has to move the watch with the file, or an edit made
+    # outside the editor afterwards goes unnoticed.
+    assert window._file_monitor._normalize(source) not in window._file_monitor.watched_paths()
+    assert window._file_monitor._normalize(destination) in window._file_monitor.watched_paths()
 
     window._closing_application = True
     window.close_tab(0, create_replacement=False)
