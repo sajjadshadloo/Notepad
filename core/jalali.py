@@ -4,7 +4,7 @@ Pure arithmetic, no dependencies. A freelancer working in Iran thinks in
 1405/06/05, not 2026-08-27, so dates are read and written in that calendar
 while everything internal stays a normal ``datetime``.
 """
-from datetime import date
+from datetime import date, timedelta
 
 MONTHS = (
     "فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور",
@@ -104,6 +104,40 @@ def to_gregorian(jy: int, jm: int, jd: int) -> date:
         gd -= month_lengths[gm]
         gm += 1
     return date(gy, gm + 1, gd)
+
+
+def is_leap(jy: int) -> bool:
+    """Whether a Jalali year has 366 days.
+
+    Derived from the conversion rather than restated as its own rule, so the
+    two can never drift apart: the leap-year cycle is the awkward part of this
+    calendar and one implementation of it is enough.
+    """
+    return (to_gregorian(jy + 1, 1, 1) - to_gregorian(jy, 1, 1)).days == 366
+
+
+def month_length(jy: int, jm: int) -> int:
+    if jm <= 6:
+        return 31
+    if jm <= 11:
+        return 30
+    return 30 if is_leap(jy) else 29
+
+
+def month_days(jy: int, jm: int) -> list[date]:
+    """Every Gregorian date in one Jalali month, in order."""
+    first = to_gregorian(jy, jm, 1)
+    return [first + timedelta(days=offset) for offset in range(month_length(jy, jm))]
+
+
+def column_of(value: date) -> int:
+    """Grid column for a calendar that starts the week on Saturday."""
+    return (value.weekday() + 2) % 7
+
+
+def shift_month(jy: int, jm: int, delta: int) -> tuple[int, int]:
+    index = (jy * 12 + (jm - 1)) + delta
+    return index // 12, index % 12 + 1
 
 
 def format_date(value: date, *, persian_digits: bool = True) -> str:

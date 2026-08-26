@@ -30,6 +30,10 @@ stays out of the way, and keeps every note as a plain `.txt` / `.md` file.
 - **`Ctrl+T` — my tasks.** Every unfinished dated item across the notes
   folder, grouped overdue / today / tomorrow / later. Selecting one opens the
   note at that line
+- **`Ctrl+Shift+D` — today's note.** One file per day under `Daily`, named
+  `1405-06-04.md` so it sorts, headed in Persian so it reads
+- A Jalali month calendar in the sidebar: days you have written are marked,
+  clicking one opens that day
 - Windows notifications when a task comes due, from the tray. Each reminder
   fires once; editing the task's text or date makes it a new one
 
@@ -77,7 +81,7 @@ python -m pytest -q
 
 ```powershell
 python -m PyInstaller --clean --noconfirm notepad.spec   # → dist\NotepadPlus\NotepadPlus.exe
-ISCC.exe installer.iss                                   # → dist\NotepadPlus-Setup-3.4.0.exe
+ISCC.exe installer.iss                                   # → dist\NotepadPlus-Setup-3.5.0.exe
 dist\NotepadPlus\NotepadPlus.exe --smoke-test            # packaged startup check; exits with code 0
 ```
 

@@ -11,6 +11,7 @@ SECTIONS = [
             ("Ctrl+O", "Open file"),
             ("Ctrl+P", "Go to file — search notes by name"),
             ("Ctrl+T", "My tasks — everything with a date"),
+            ("Ctrl+Shift+D", "Today's note"),
             ("Ctrl+S", "Save"),
             ("Ctrl+Shift+S", "Save as"),
             ("F2", "Rename document / file"),

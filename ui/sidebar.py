@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
 import core.note_index as note_index
 from core.rtl_detector import detect_direction
 from core.settings_manager import font_chain
+from ui.calendar_panel import CalendarPanel
 from core.search_service import search_notes
 
 NOTE_EXTENSIONS = (".txt", ".md", ".markdown")
@@ -40,6 +41,7 @@ class _SearchWorker(QThread):
 class Sidebar(QWidget):
     note_activated = pyqtSignal(str)
     root_changed = pyqtSignal(str)
+    day_activated = pyqtSignal(object)
 
     def __init__(
         self,
@@ -85,6 +87,10 @@ class Sidebar(QWidget):
         self.search_input.textChanged.connect(self._on_search_text_changed)
         self.search_input.textChanged.connect(self._style_search_input)
         layout.addWidget(self.search_input)
+
+        self.calendar = CalendarPanel(self.root)
+        self.calendar.day_activated.connect(self.day_activated)
+        layout.addWidget(self.calendar)
 
         self._search_debounce = QTimer(self)
         self._search_debounce.setSingleShot(True)
@@ -145,6 +151,7 @@ class Sidebar(QWidget):
             self.root = folder
             self.root_label.setText(self._short_root())
             self._style_root_label()
+            self.calendar.set_root(folder)
             self.root_changed.emit(folder)
             self.refresh()
 
@@ -191,6 +198,7 @@ class Sidebar(QWidget):
             self._needs_refresh = True
             return
         self._needs_refresh = False
+        self.calendar.refresh()
         root_path = Path(self.root)
         root_path.mkdir(parents=True, exist_ok=True)
         files = [

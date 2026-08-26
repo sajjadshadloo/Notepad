@@ -36,6 +36,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
+from core import daily_notes
 import core.note_index as note_index
 import core.settings_manager as settings_manager
 from core.external_change_monitor import ExternalChangeMonitor
@@ -67,7 +68,7 @@ from ui.styles import build_stylesheet
 
 
 APP_TITLE = "Notepad Plus"
-APP_VERSION = "3.4.0"
+APP_VERSION = "3.5.0"
 FILE_FILTER = "Text Files (*.txt);;Markdown (*.md *.markdown);;All Files (*.*)"
 ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 
@@ -337,6 +338,9 @@ class MainWindow(QMainWindow):
             "&Go to File…", self.show_quick_open, "Ctrl+P"
         )
         self.today_action = self._action("My &Tasks…", self.show_today, "Ctrl+T")
+        self.daily_note_action = self._action(
+            "Today's &Note", self.open_daily_note, "Ctrl+Shift+D"
+        )
         self.save_action = self._action("&Save", self.save_current, "Ctrl+S")
         self.save_as_action = self._action(
             "Save &As…", self.save_current_as, "Ctrl+Shift+S"
@@ -530,6 +534,7 @@ class MainWindow(QMainWindow):
         file_menu.addAction(self.open_action)
         file_menu.addAction(self.quick_open_action)
         file_menu.addAction(self.today_action)
+        file_menu.addAction(self.daily_note_action)
         file_menu.addSeparator()
         file_menu.addAction(self.save_action)
         file_menu.addAction(self.save_as_action)
@@ -649,6 +654,7 @@ class MainWindow(QMainWindow):
             font_families=settings_manager.font_chain(self._cfg),
         )
         self.sidebar.note_activated.connect(self._open_from_sidebar)
+        self.sidebar.day_activated.connect(self.open_daily_note)
         self.sidebar.root_changed.connect(self._sidebar_root_changed)
         self.sidebar.setVisible(self._cfg.get("sidebar_visible", False))
 
@@ -854,6 +860,31 @@ class MainWindow(QMainWindow):
         )
         for path in paths:
             self.open_file(path)
+
+    def open_daily_note(self, day=None):
+        """Ctrl+Shift+D — the note for a day, created on first visit."""
+        from datetime import date as _date
+
+        when = day if isinstance(day, _date) else _date.today()
+        path = daily_notes.path_for(self._cfg["notes_root"], when)
+        if not path.exists():
+            try:
+                write_text_file_atomic(path, daily_notes.starter_text(when), "utf-8")
+            except OSError as exc:
+                QMessageBox.critical(
+                    self,
+                    "Daily Note Failed",
+                    "The note for that day could not be created:" + chr(10) + str(exc),
+                )
+                return
+            self.sidebar.refresh()
+        if self.open_file(str(path)):
+            # Land at the end, ready to type rather than at the heading.
+            editor = self.current_document().editor
+            cursor = editor.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            editor.setTextCursor(cursor)
+            editor.setFocus()
 
     def show_today(self):
         """Ctrl+T — the dated to-do items from every note, in one place."""

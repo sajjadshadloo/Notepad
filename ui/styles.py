@@ -302,6 +302,25 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
 #sidebarSearch {{
     background: {t['surface_alt']};
 }}
+#calendarWeekday {{
+    color: {t['muted']};
+    font-size: 10px;
+    padding: 2px 0;
+}}
+#calendarDay {{
+    color: {t['text']};
+    border: 1px solid transparent;
+    border-radius: 5px;
+    padding: 2px 0;
+}}
+#calendarDay:hover {{ background: {t['hover']}; }}
+#calendarDay[holiday="true"] {{ color: {t['danger']}; }}
+#calendarDay[written="true"] {{ color: {t['accent']}; }}
+#calendarDay[today="true"] {{
+    border-color: {t['accent']};
+    color: {t['accent']};
+}}
+
 #quickOpenList, #noteList {{
     background: transparent;
     border: none;
