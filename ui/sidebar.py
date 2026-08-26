@@ -1,15 +1,23 @@
+"""The left column: notes, tasks and a Jalali calendar, one at a time.
+
+Three panes behind a segmented control rather than four things stacked in
+one scroll: notes, tasks and the calendar answer different questions, and
+stacking them meant none of the three ever had room.
+"""
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from PyQt6.QtCore import QThread, QTimer, Qt, pyqtSignal
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
+    QStackedWidget,
+    QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -19,10 +27,20 @@ from PyQt6.QtWidgets import (
 import core.note_index as note_index
 from core.rtl_detector import detect_direction
 from core.settings_manager import font_chain
+from core.tasks import Task, group_of, sort_for_today
 from ui.calendar_panel import CalendarPanel
 from core.search_service import search_notes
+from core.jalali import to_persian_digits
+from ui.styles import current_palette
 
 NOTE_EXTENSIONS = (".txt", ".md", ".markdown")
+
+PANES = (("notes", "یادداشت‌ها"), ("tasks", "کارها"), ("calendar", "تقویم"))
+
+# Same urgency order the Ctrl+T list uses, so the two never disagree.
+TASK_GROUP_ORDER = ("عقب‌افتاده", "امروز", "فردا", "بعداً", "بدون تاریخ")
+
+WEEKDAY_NAMES = ("شنبه", "یکشنبه", "دوشنبه", "سه‌شنبه", "چهارشنبه", "پنجشنبه", "جمعه")
 
 
 class _SearchWorker(QThread):
@@ -38,10 +56,30 @@ class _SearchWorker(QThread):
         self.finished_with_results.emit(results)
 
 
+class _TaskScanWorker(QThread):
+    """Reads every note to find tasks — never on the UI thread."""
+
+    scanned = pyqtSignal(list)
+
+    def __init__(self, root: str, parent=None):
+        super().__init__(parent)
+        self.root = root
+
+    def run(self):
+        from ui.reminder_service import scan_folder
+
+        try:
+            self.scanned.emit(scan_folder(self.root))
+        except Exception:
+            self.scanned.emit([])
+
+
 class Sidebar(QWidget):
     note_activated = pyqtSignal(str)
     root_changed = pyqtSignal(str)
     day_activated = pyqtSignal(object)
+    # (path, line) — opening a task from the sidebar jumps to its exact line.
+    task_activated = pyqtSignal(str, int)
 
     def __init__(
         self,
@@ -67,35 +105,57 @@ class Sidebar(QWidget):
         sidebar_font.setFamilies(font_families or font_chain({}))
         self.setFont(sidebar_font)
 
+        self._tasks: list[Task] = []
+        self._tasks_stale = True
+        self._task_worker: _TaskScanWorker | None = None
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(8)
+        layout.setSpacing(10)
 
-        header = QHBoxLayout()
-        self.root_label = QLabel(self._short_root())
-        self.root_label.setObjectName("sidebarHeader")
-        self._style_root_label()
-        change_root_button = QPushButton("Change folder")
-        change_root_button.clicked.connect(self.choose_root)
-        header.addWidget(self.root_label, 1)
-        header.addWidget(change_root_button)
-        layout.addLayout(header)
+        layout.addWidget(self._build_switch())
+
+        self._panes = QStackedWidget()
+        self._panes.addWidget(self._build_notes_pane())
+        self._panes.addWidget(self._build_tasks_pane())
+        self._panes.addWidget(self._build_calendar_pane())
+        layout.addWidget(self._panes, 1)
+
+        self._search_debounce = QTimer(self)
+        self._search_debounce.setSingleShot(True)
+        self._search_debounce.setInterval(300)
+        self._search_debounce.timeout.connect(self._run_search)
+
+    def _build_switch(self) -> QWidget:
+        switch = QWidget()
+        switch.setObjectName("sidebarSwitch")
+        row = QHBoxLayout(switch)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(2)
+        self._pane_buttons: dict[str, QToolButton] = {}
+        for key, label in PANES:
+            button = QToolButton()
+            button.setText(label)
+            button.setCheckable(True)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.clicked.connect(lambda _checked, k=key: self.show_pane(k))
+            row.addWidget(button, 1)
+            self._pane_buttons[key] = button
+        self._pane_buttons["notes"].setChecked(True)
+        return switch
+
+    def _build_notes_pane(self) -> QWidget:
+        pane = QWidget()
+        column = QVBoxLayout(pane)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(8)
 
         self.search_input = QLineEdit()
         self.search_input.setObjectName("sidebarSearch")
         self.search_input.setPlaceholderText("Search notes…")
         self.search_input.textChanged.connect(self._on_search_text_changed)
         self.search_input.textChanged.connect(self._style_search_input)
-        layout.addWidget(self.search_input)
-
-        self.calendar = CalendarPanel(self.root)
-        self.calendar.day_activated.connect(self.day_activated)
-        layout.addWidget(self.calendar)
-
-        self._search_debounce = QTimer(self)
-        self._search_debounce.setSingleShot(True)
-        self._search_debounce.setInterval(300)
-        self._search_debounce.timeout.connect(self._run_search)
+        column.addWidget(self.search_input)
 
         # A tree, not a list: subfolders are how notes get organised, and a
         # flat rglob hid that structure entirely.
@@ -106,7 +166,68 @@ class Sidebar(QWidget):
         # Single click opens a note; itemActivated keeps Enter working too.
         self.note_list.itemClicked.connect(self._activate_item)
         self.note_list.itemActivated.connect(self._activate_item)
-        layout.addWidget(self.note_list, 1)
+        column.addWidget(self.note_list, 1)
+
+        # The notes root is a rare change, so it sits at the foot of the pane
+        # it applies to rather than taking a header row from every pane.
+        self.root_label = QLabel(self._short_root())
+        self.root_label.setObjectName("sidebarHeader")
+        self._style_root_label()
+        change_root_button = QPushButton("Change…")
+        change_root_button.clicked.connect(self.choose_root)
+        footer = QHBoxLayout()
+        footer.addWidget(self.root_label, 1)
+        footer.addWidget(change_root_button)
+        column.addLayout(footer)
+        return pane
+
+    def _build_tasks_pane(self) -> QWidget:
+        pane = QWidget()
+        pane.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        column = QVBoxLayout(pane)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(6)
+        self.task_list = QTreeWidget()
+        self.task_list.setObjectName("noteList")
+        self.task_list.setHeaderHidden(True)
+        self.task_list.setIndentation(10)
+        self.task_list.itemClicked.connect(self._activate_task)
+        self.task_list.itemActivated.connect(self._activate_task)
+        column.addWidget(self.task_list, 1)
+        return pane
+
+    def _build_calendar_pane(self) -> QWidget:
+        pane = QWidget()
+        column = QVBoxLayout(pane)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(10)
+
+        self.calendar = CalendarPanel(self.root)
+        self.calendar.day_activated.connect(self.day_activated)
+        column.addWidget(self.calendar)
+
+        caption = QLabel("این هفته")
+        caption.setObjectName("sidebarSectionLabel")
+        column.addWidget(caption)
+
+        self.week_ahead = QWidget()
+        self.week_ahead.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self._week_rows = QVBoxLayout(self.week_ahead)
+        self._week_rows.setContentsMargins(0, 0, 0, 0)
+        self._week_rows.setSpacing(4)
+        column.addWidget(self.week_ahead)
+
+        column.addStretch(1)
+        return pane
+
+    def show_pane(self, key: str):
+        for name, button in self._pane_buttons.items():
+            button.setChecked(name == key)
+        self._panes.setCurrentIndex([k for k, _ in PANES].index(key))
+        # Tasks and the week-ahead summary both come from a full folder scan,
+        # so it happens when one of them is actually looked at, not on save.
+        if key in ("tasks", "calendar") and self._tasks_stale:
+            self._scan_tasks()
 
     def _short_root(self) -> str:
         name = Path(self.root).name or self.root
@@ -152,6 +273,7 @@ class Sidebar(QWidget):
             self.root_label.setText(self._short_root())
             self._style_root_label()
             self.calendar.set_root(folder)
+            self._tasks_stale = True
             self.root_changed.emit(folder)
             self.refresh()
 
@@ -198,7 +320,10 @@ class Sidebar(QWidget):
             self._needs_refresh = True
             return
         self._needs_refresh = False
+        self._tasks_stale = True
         self.calendar.refresh()
+        if self._panes.currentIndex() in (1, 2):
+            self._scan_tasks()
         root_path = Path(self.root)
         root_path.mkdir(parents=True, exist_ok=True)
         files = [
@@ -293,6 +418,103 @@ class Sidebar(QWidget):
         super().showEvent(event)
         if self._needs_refresh:
             self.refresh()
+
+    # Tasks and the week ahead
+
+    def _scan_tasks(self):
+        if self._task_worker and self._task_worker.isRunning():
+            return
+        self._tasks_stale = False
+        self._task_worker = _TaskScanWorker(self.root, self)
+        self._task_worker.scanned.connect(self._tasks_scanned)
+        self._task_worker.start()
+
+    def _tasks_scanned(self, tasks: list):
+        self._tasks = sort_for_today(tasks, datetime.now())
+        self._rebuild_task_list()
+        self._rebuild_week_ahead()
+
+    def _rebuild_task_list(self):
+        self.task_list.clear()
+        now = datetime.now()
+        palette = current_palette()
+        overdue_color = QColor(palette["danger"])
+        muted = QColor(palette["muted"])
+
+        buckets: dict[str, list[Task]] = {}
+        for task in self._tasks:
+            buckets.setdefault(group_of(task, now), []).append(task)
+
+        for title in TASK_GROUP_ORDER:
+            tasks = buckets.get(title)
+            if not tasks:
+                continue
+            header = QTreeWidgetItem(
+                [f"{title}   {to_persian_digits(str(len(tasks)))}"]
+            )
+            bold = QFont(self.task_list.font())
+            bold.setBold(True)
+            header.setFont(0, bold)
+            header.setForeground(
+                0, overdue_color if title == "عقب‌افتاده" else muted
+            )
+            self.task_list.addTopLevelItem(header)
+            header.setExpanded(True)
+            for task in tasks:
+                item = QTreeWidgetItem([f"☐  {task.text}"])
+                item.setData(
+                    0, Qt.ItemDataRole.UserRole, (task.path, task.line_number)
+                )
+                item.setToolTip(0, Path(task.path).name)
+                item.setTextAlignment(
+                    0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                )
+                if task.overdue:
+                    item.setForeground(0, overdue_color)
+                header.addChild(item)
+
+        if not self._tasks:
+            self.task_list.addTopLevelItem(QTreeWidgetItem(["کاری باقی نمانده ✓"]))
+
+    def _rebuild_week_ahead(self):
+        """One row per day for the coming week, with how much is due on it."""
+        while self._week_rows.count():
+            item = self._week_rows.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        now = datetime.now()
+        counts: dict[str, int] = {}
+        for task in self._tasks:
+            due = task.next_due(now)
+            if due is not None:
+                counts[due.date().isoformat()] = (
+                    counts.get(due.date().isoformat(), 0) + 1
+                )
+
+        for offset in range(7):
+            day = (now + timedelta(days=offset)).date()
+            count = counts.get(day.isoformat(), 0)
+            if offset > 0 and count == 0:
+                continue
+            row = QHBoxLayout()
+            # Saturday is column 0 in this calendar, so the name list starts there.
+            name = "امروز" if offset == 0 else WEEKDAY_NAMES[(day.weekday() + 2) % 7]
+            label = QLabel(name)
+            label.setObjectName("weekAheadRow")
+            amount = QLabel(to_persian_digits(str(count)) if count else "—")
+            amount.setObjectName("weekAheadCount")
+            row.addWidget(label, 1)
+            row.addWidget(amount)
+            holder = QWidget()
+            holder.setLayout(row)
+            row.setContentsMargins(2, 0, 2, 0)
+            self._week_rows.addWidget(holder)
+
+    def _activate_task(self, item: QTreeWidgetItem):
+        payload = item.data(0, Qt.ItemDataRole.UserRole)
+        if payload:
+            self.task_activated.emit(payload[0], payload[1])
 
     def _activate_item(self, item: QTreeWidgetItem):
         path = item.data(0, Qt.ItemDataRole.UserRole)

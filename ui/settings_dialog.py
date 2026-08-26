@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
 )
 
 import core.settings_manager as settings_manager
+import ui.styles as styles
 
 DEFAULTS_LATIN = settings_manager.DEFAULTS["font_family_latin"]
 DEFAULTS_PERSIAN = settings_manager.DEFAULTS["font_family_persian"]
@@ -72,6 +73,18 @@ class SettingsDialog(QDialog):
         )
         self.theme_combo.setCurrentIndex(index)
         form.addRow("Theme:", self.theme_combo)
+
+        # The palette picks which eleven colours the theme draws from; the
+        # theme still picks the dark or light half of them.
+        self.palette_combo = QComboBox()
+        for name in styles.palette_names():
+            self.palette_combo.addItem(styles.palette_label(name), name)
+        current_palette = settings.get("accent_palette", styles.DEFAULT_PALETTE)
+        self.palette_combo.setCurrentIndex(
+            max(0, self.palette_combo.findData(current_palette))
+        )
+        self.palette_combo.setToolTip("The colour set the theme draws from")
+        form.addRow("Colours:", self.palette_combo)
 
         self.latin_combo = self._family_combo(
             LATIN_SUGGESTIONS, settings.get("font_family_latin", "Inter")
@@ -213,6 +226,7 @@ class SettingsDialog(QDialog):
     def values(self) -> dict:
         return {
             "theme": self.theme_combo.currentData(),
+            "accent_palette": self.palette_combo.currentData(),
             "font_family_latin": (
                 self.latin_combo.currentText().strip()
                 or DEFAULTS_LATIN

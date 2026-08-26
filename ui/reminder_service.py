@@ -17,7 +17,7 @@ import core.reminder_store as reminder_store
 import core.win_scheduler as win_scheduler
 from core.settings_manager import app_data_dir
 from core.file_service import read_text_file
-from core.tasks import Task, due_within, parse_document
+from core.tasks import Task, due_within, parse_document, today_progress
 
 log = logging.getLogger(__name__)
 
@@ -71,6 +71,8 @@ class ReminderService(QObject):
 
     task_activated = pyqtSignal(str, int)
     scanned_once = pyqtSignal()
+    # (done, total) for today — drives the progress meter in the tab strip.
+    progress_changed = pyqtSignal(int, int)
 
     def __init__(self, root: str, icon: QIcon, parent=None, schedule: bool = True):
         super().__init__(parent)
@@ -96,6 +98,16 @@ class ReminderService(QObject):
     def set_root(self, root: str):
         self._root = root
 
+    def open_tasks(self) -> list[Task]:
+        """Unfinished tasks from the last scan, most urgent first.
+
+        Handed out rather than rescanned: Ctrl+P has to feel instant, and
+        this is already in memory from the periodic check.
+        """
+        from core.tasks import sort_for_today
+
+        return sort_for_today(list(self._by_id.values()), datetime.now())
+
     def check_now(self):
         if self._worker is not None and self._worker.isRunning():
             return
@@ -105,6 +117,8 @@ class ReminderService(QObject):
 
     def _handle_tasks(self, tasks: list):
         self._by_id = {win_scheduler.task_id(t.key()): t for t in tasks}
+        done, total = today_progress(tasks, datetime.now())
+        self.progress_changed.emit(done, total)
         self.scanned_once.emit()
         if self._schedule:
             self._sync_schedule(tasks)

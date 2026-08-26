@@ -17,7 +17,7 @@ from core.list_editing import (
     parse_list_item,
 )
 from core.rtl_detector import detect_direction
-from ui.styles import current_is_light, current_palette
+from ui.styles import current_palette
 
 
 class LineNumberArea(QWidget):
@@ -438,7 +438,9 @@ class SmartEditor(QTextEdit):
             return
 
         document = self.document()
-        background = QColor("#eef2f9" if current_is_light() else "#2a2b36")
+        # From the palette, not a fixed pair: a hardcoded blue-grey stayed
+        # blue-grey under the warm and violet palettes.
+        background = QColor(current_palette()["surface_alt"])
         viewport_bottom = self.viewport().height()
         selections: list[QTextEdit.ExtraSelection] = []
         block = self.cursorForPosition(QPoint(0, 0)).block()

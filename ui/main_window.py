@@ -1,3 +1,4 @@
+import logging
 import os
 from datetime import datetime
 from pathlib import Path
@@ -26,7 +27,9 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QMenu,
     QMessageBox,
+    QProgressBar,
     QPushButton,
+    QSizePolicy,
     QSplitter,
     QSystemTrayIcon,
     QTabBar,
@@ -34,6 +37,7 @@ from PyQt6.QtWidgets import (
     QToolBar,
     QToolButton,
     QVBoxLayout,
+    QWidget,
 )
 
 from core import daily_notes
@@ -41,6 +45,8 @@ import core.note_index as note_index
 import core.settings_manager as settings_manager
 from core.external_change_monitor import ExternalChangeMonitor
 from core.export_service import export_to_html, export_to_pdf
+from core.jalali import to_persian_digits
+from core.tasks import add_stamp, shift_stamp, toggle_repeat
 from core.formatting import (
     toggle_bold,
     toggle_bullet,
@@ -66,9 +72,10 @@ from ui.shortcuts_dialog import ShortcutsDialog
 from ui.sidebar import Sidebar
 from ui.styles import build_stylesheet
 
+log = logging.getLogger(__name__)
 
 APP_TITLE = "Notepad Plus"
-APP_VERSION = "3.6.0"
+APP_VERSION = "3.7.0"
 FILE_FILTER = "Text Files (*.txt);;Markdown (*.md *.markdown);;All Files (*.*)"
 ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 
@@ -430,6 +437,21 @@ class MainWindow(QMainWindow):
             lambda: self._transform_selected_lines(toggle_done),
             "Ctrl+D",
         )
+        # A task becomes a deadline by carrying a stamp, and a habit by
+        # carrying the repeat mark after it. Both stay plain text.
+        self.stamp_action = self._action(
+            "Add &Date Stamp",
+            lambda: self._transform_selected_lines(add_stamp),
+            "Ctrl+Shift+A",
+        )
+        self.repeat_action = self._action(
+            "Repeat &Weekly",
+            lambda: self._transform_selected_lines(toggle_repeat),
+            "Ctrl+Shift+R",
+        )
+        self.fence_action = self._action(
+            "Code &Fence", self.wrap_in_code_fence, "Ctrl+Shift+C"
+        )
         self.font_action = self._action("&Font…", self.show_settings)
 
         # View
@@ -587,6 +609,10 @@ class MainWindow(QMainWindow):
         format_menu.addAction(self.numbered_action)
         format_menu.addAction(self.todo_action)
         format_menu.addAction(self.toggle_done_action)
+        format_menu.addAction(self.stamp_action)
+        format_menu.addAction(self.repeat_action)
+        format_menu.addSeparator()
+        format_menu.addAction(self.fence_action)
         format_menu.addSeparator()
         format_menu.addAction(self.font_action)
 
@@ -630,6 +656,28 @@ class MainWindow(QMainWindow):
         bar.addAction(bullet)
         bar.addAction(numbered)
         bar.addAction(todo)
+        bar.addSeparator()
+
+        # The three that turn a checkbox into something with a deadline.
+        stamp = self._action("@", self.stamp_action.trigger)
+        stamp.setToolTip("Add today's date stamp to this task")
+        repeat = self._action("↻", self.repeat_action.trigger)
+        repeat.setToolTip("Repeat this task weekly")
+        fence = self._action("</>", self.fence_action.trigger)
+        fence.setToolTip("Wrap the selection in a code fence")
+        bar.addAction(stamp)
+        bar.addAction(repeat)
+        bar.addAction(fence)
+
+        # Find sits at the far end, away from the formatting cluster.
+        spacer = QWidget()
+        spacer.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        bar.addWidget(spacer)
+        find = self._action("Find", self.find_action.trigger)
+        find.setToolTip("Find and replace  (Ctrl+F)")
+        bar.addAction(find)
         self.addToolBar(bar)
 
     def _build_ui(self):
@@ -648,6 +696,10 @@ class MainWindow(QMainWindow):
         tab_bar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         tab_bar.customContextMenuRequested.connect(self._show_tab_menu)
 
+        self.tabs.setCornerWidget(
+            self._build_today_meter(), Qt.Corner.TopRightCorner
+        )
+
         self.sidebar = Sidebar(
             self._cfg["notes_root"],
             self._note_index,
@@ -655,6 +707,7 @@ class MainWindow(QMainWindow):
         )
         self.sidebar.note_activated.connect(self._open_from_sidebar)
         self.sidebar.day_activated.connect(self.open_daily_note)
+        self.sidebar.task_activated.connect(self._open_task)
         self.sidebar.root_changed.connect(self._sidebar_root_changed)
         self.sidebar.setVisible(self._cfg.get("sidebar_visible", False))
 
@@ -664,13 +717,19 @@ class MainWindow(QMainWindow):
         self._apply_sidebar_side()
         self.setCentralWidget(self._splitter)
 
+        # Save state leads on the left, where the eye lands first — it is the
+        # one thing here you might need to act on. Counts and the three
+        # pickers sit right, out of the way until wanted.
+        self.saved_label = QLabel()
+        self.saved_label.setObjectName("savedLabel")
         self.cursor_label = QLabel("Ln 1, Col 1")
+        self.cursor_label.setObjectName("statusLabel")
+        self.statusBar().addWidget(self.saved_label)
+        self.statusBar().addWidget(self.cursor_label)
+
         self.count_label = QLabel("0 characters")
-        self.zoom_label = QLabel("100%")
-        self.saved_label = QLabel("Saved")
-        for label in (self.cursor_label, self.count_label, self.zoom_label):
-            label.setObjectName("statusLabel")
-            self.statusBar().addPermanentWidget(label)
+        self.count_label.setObjectName("statusLabel")
+        self.statusBar().addPermanentWidget(self.count_label)
 
         # Encoding and direction are clickable chips: one click opens the
         # picker right above the status bar.
@@ -688,13 +747,81 @@ class MainWindow(QMainWindow):
                 self.direction_button, self.direction_group.actions()
             )
         )
-        for button in (self.encoding_button, self.direction_button):
+        # Zoom joins them as a chip rather than a dead label: at a glance it
+        # reads the same, and a click puts it back to 100%.
+        self.zoom_label = QPushButton("100%")
+        self.zoom_label.setToolTip("Zoom — click to restore 100%")
+        self.zoom_label.clicked.connect(self.reset_zoom)
+
+        for button in (self.encoding_button, self.direction_button, self.zoom_label):
             button.setObjectName("statusButton")
             button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setFlat(True)
             self.statusBar().addPermanentWidget(button)
 
-        self.saved_label.setObjectName("statusLabel")
-        self.statusBar().addPermanentWidget(self.saved_label)
+    def _build_today_meter(self) -> QWidget:
+        """How much of today is done, at the end of the tab strip.
+
+        Fed by the reminder service's existing scan, so it costs nothing
+        extra — and it stays hidden on a day with nothing scheduled rather
+        than sitting there empty.
+        """
+        holder = QWidget()
+        row = QHBoxLayout(holder)
+        row.setContentsMargins(10, 0, 10, 0)
+        row.setSpacing(8)
+
+        caption = QLabel("امروز")
+        caption.setObjectName("todayMeterCaption")
+        self.today_meter = QProgressBar()
+        self.today_meter.setObjectName("todayMeter")
+        self.today_meter.setTextVisible(False)
+        self.today_meter.setFixedWidth(96)
+        self.today_meter_label = QLabel()
+        self.today_meter_label.setObjectName("todayMeterLabel")
+
+        row.addWidget(caption)
+        row.addWidget(self.today_meter)
+        row.addWidget(self.today_meter_label)
+        holder.setVisible(False)
+        self._today_meter_holder = holder
+        return holder
+
+    def update_today_meter(self, done: int, total: int):
+        self._today_meter_holder.setVisible(total > 0)
+        if total <= 0:
+            return
+        self.today_meter.setMaximum(total)
+        self.today_meter.setValue(done)
+        self.today_meter_label.setText(to_persian_digits(f"{done}/{total}"))
+        self._today_meter_holder.setToolTip(
+            to_persian_digits(f"{done} از {total} کار امروز انجام شده")
+        )
+
+    def wrap_in_code_fence(self):
+        """Put ``` lines around the selection, or open an empty fence.
+
+        One edit block, so a single Ctrl+Z takes the whole thing back.
+        """
+        tab = self.current_document()
+        if not tab:
+            return
+        cursor = tab.editor.textCursor()
+        cursor.beginEditBlock()
+        if cursor.hasSelection():
+            start, end = cursor.selectionStart(), cursor.selectionEnd()
+            cursor.setPosition(end)
+            cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
+            cursor.insertText("\n```")
+            cursor.setPosition(start)
+            cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+            cursor.insertText("```\n")
+        else:
+            cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+            cursor.insertText("```\n\n```\n")
+            cursor.movePosition(QTextCursor.MoveOperation.Up, n=2)
+        cursor.endEditBlock()
+        tab.editor.setTextCursor(cursor)
 
     def _popup_status_menu(self, button, actions):
         menu = QMenu(self)
@@ -890,13 +1017,37 @@ class MainWindow(QMainWindow):
         """Ctrl+T — the dated to-do items from every note, in one place."""
         dialog = TodayDialog(self._cfg["notes_root"], self)
         dialog.task_chosen.connect(self._open_task)
+        dialog.snooze_requested.connect(self._snooze_task)
         dialog.exec()
 
     def show_quick_open(self):
         """Ctrl+P — find a note by name without leaving the keyboard."""
-        dialog = QuickOpenDialog(self._cfg["notes_root"], self)
+        dialog = QuickOpenDialog(
+            self._cfg["notes_root"],
+            self,
+            commands=self._palette_commands(),
+            tasks=self._reminders.open_tasks() if self._reminders else [],
+        )
         dialog.note_chosen.connect(self.open_file)
+        dialog.task_chosen.connect(self._open_task)
         dialog.exec()
+
+    def _palette_commands(self) -> list[tuple]:
+        """The handful of commands worth reaching without the menus."""
+        return [
+            (label, action.shortcut().toString(), action.trigger)
+            for label, action in (
+                ("New document", self.new_action),
+                ("Save", self.save_action),
+                ("Today's note", self.daily_note_action),
+                ("My tasks", self.today_action),
+                ("Find and replace", self.find_action),
+                ("Toggle sidebar", self.sidebar_action),
+                ("Settings", self.settings_action),
+                ("Keyboard shortcuts", self.shortcuts_action),
+            )
+            if action is not None
+        ]
 
     def open_file(self, path: str) -> bool:
         candidate = str(Path(path).resolve())
@@ -1529,7 +1680,21 @@ class MainWindow(QMainWindow):
         self._cfg["theme"] = theme
         settings_manager.save(self._cfg)
         self.theme_actions[theme].setChecked(True)
-        QApplication.instance().setStyleSheet(build_stylesheet(theme))
+        self._restyle()
+
+    def _restyle(self):
+        """Rebuild the stylesheet from the current theme and palette.
+
+        The editor paints code backgrounds and markers itself, so those have
+        to be recomputed here — a stylesheet swap alone leaves them on the
+        outgoing palette's colours.
+        """
+        QApplication.instance().setStyleSheet(
+            build_stylesheet(
+                self._cfg.get("theme", "system"),
+                self._cfg.get("accent_palette", "graphite"),
+            )
+        )
         for index in range(self.tabs.count()):
             tab = self.tabs.widget(index)
             tab.editor.refresh_code_blocks()
@@ -1540,7 +1705,9 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         values = dialog.values()
-        theme_changed = values["theme"] != self._cfg.get("theme")
+        restyle_needed = values["theme"] != self._cfg.get("theme") or values[
+            "accent_palette"
+        ] != self._cfg.get("accent_palette")
         scheduling_off = (
             self._cfg.get("schedule_reminders", True)
             and not values["schedule_reminders"]
@@ -1548,8 +1715,9 @@ class MainWindow(QMainWindow):
         self._cfg.update(values)
         settings_manager.save(self._cfg)
         settings_manager.resolve_save_dir(self._cfg)
-        if theme_changed:
-            self.set_theme(values["theme"])
+        if restyle_needed:
+            self.theme_actions[values["theme"]].setChecked(True)
+            self._restyle()
         if self._reminders is not None:
             self._reminders.set_scheduling(values["schedule_reminders"])
             if scheduling_off:
@@ -1562,7 +1730,11 @@ class MainWindow(QMainWindow):
         self._update_status()
 
     def show_shortcuts(self):
-        ShortcutsDialog(self._cfg.get("theme", "system"), self).show()
+        ShortcutsDialog(
+            self._cfg.get("theme", "system"),
+            self,
+            self._cfg.get("accent_palette", "graphite"),
+        ).show()
 
     def show_about(self):
         QMessageBox.about(
@@ -1609,7 +1781,16 @@ class MainWindow(QMainWindow):
         if tab.editor.direction_mode == "auto":
             direction += " · Auto"
         self.direction_button.setText(direction)
-        self.saved_label.setText("Unsaved" if tab.modified else "Saved")
+        # A dot carries the state at a glance; the word confirms it. The
+        # property drives the colour, so the sheet owns which one it is.
+        self.saved_label.setText(
+            "● Unsaved" if tab.modified else "● Saved"
+        )
+        dirty = "true" if tab.modified else "false"
+        if self.saved_label.property("dirty") != dirty:
+            self.saved_label.setProperty("dirty", dirty)
+            self.saved_label.style().unpolish(self.saved_label)
+            self.saved_label.style().polish(self.saved_label)
 
     # Recent files, recovery, migration
 
@@ -1727,6 +1908,7 @@ class MainWindow(QMainWindow):
             schedule=self._cfg.get("schedule_reminders", True),
         )
         self._reminders.task_activated.connect(self._open_task)
+        self._reminders.progress_changed.connect(self.update_today_meter)
         self._reminders.start()
 
     def show_scheduled_reminder(self, identifier: str):
@@ -1743,6 +1925,63 @@ class MainWindow(QMainWindow):
                 lambda: self._reminders.show_by_id(identifier)
             )
             self._reminders.check_now()
+
+    def _tab_for_path(self, path: str) -> DocumentTab | None:
+        target = os.path.normcase(os.path.abspath(path))
+        for index in range(self.tabs.count()):
+            tab = self.tabs.widget(index)
+            if tab.path and os.path.normcase(os.path.abspath(tab.path)) == target:
+                return tab
+        return None
+
+    def _snooze_task(self, path: str, line_number: int, days: int):
+        """Push one task's date forward by `days`.
+
+        A note that is already open is edited through its document, so the
+        change joins that tab's undo stack and any unsaved work in it
+        survives; only a note nobody has open is rewritten on disk.
+        """
+        tab = self._tab_for_path(path)
+        if tab is not None:
+            block = tab.editor.document().findBlockByNumber(line_number)
+            if not block.isValid():
+                return
+            moved = shift_stamp(block.text(), days)
+            if moved is None:
+                return
+            # Anchored from the start of the block to its end rather than
+            # QTextCursor.BlockUnderCursor, which also takes the newline
+            # before it — replacing that joined the line onto the one above.
+            # One edit block, so a single Ctrl+Z takes the whole thing back.
+            cursor = QTextCursor(block)
+            cursor.beginEditBlock()
+            cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+            cursor.movePosition(
+                QTextCursor.MoveOperation.EndOfBlock,
+                QTextCursor.MoveMode.KeepAnchor,
+            )
+            cursor.insertText(moved)
+            cursor.endEditBlock()
+            self.statusBar().showMessage("کار به فردا موکول شد", 3000)
+            return
+
+        try:
+            loaded = read_text_file(path)
+            lines = loaded.text.splitlines(keepends=True)
+            if line_number >= len(lines):
+                return
+            original = lines[line_number]
+            body = original.rstrip("\r\n")
+            moved = shift_stamp(body, days)
+            if moved is None:
+                return
+            lines[line_number] = moved + original[len(body):]
+            write_text_file_atomic(path, "".join(lines), loaded.encoding)
+        except (OSError, UnicodeError):
+            log.warning("Could not snooze the task in %s", path, exc_info=True)
+            self.statusBar().showMessage("تعویق این کار ممکن نشد", 4000)
+            return
+        self.statusBar().showMessage("کار به فردا موکول شد", 3000)
 
     def _open_task(self, path: str, line_number: int):
         """Jump to the exact line a reminder came from."""

@@ -31,6 +31,9 @@ DEFAULTS = {
     "font_family_persian": "Vazirmatn",
     "font_size": 14,
     "theme": "system",
+    # Which set of eleven colour tokens the theme picks its half from.
+    # See ui.styles.PALETTES; an unknown name falls back to the default.
+    "accent_palette": "graphite",
     "word_wrap": True,
     "recent_files": [],
     "migration_checked": False,

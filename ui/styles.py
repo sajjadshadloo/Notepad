@@ -1,32 +1,130 @@
-DARK = {
-    # Base pair requested for 2.5.0: #212128 (editor/window) + #2b2b33
-    # (chrome surfaces). The alt/hover/border steps are derived from them.
-    "window": "#212128",
-    "surface": "#2b2b33",
-    "surface_alt": "#33333d",
-    "hover": "#3a3a45",
-    "border": "#42424e",
-    "text": "#e7e8ec",
-    "muted": "#989aa6",
-    "accent": "#4cc2ff",
-    "accent_hover": "#73d1ff",
-    "on_accent": "#10131a",
-    "danger": "#ff6b78",
+"""Colour tokens and the application stylesheet.
+
+Every colour in the app comes from one of eleven tokens. A palette is one
+dark/light pair of those eleven; the theme picks which half is used. Nothing
+outside this module names a hex value, so a new palette is a data change.
+"""
+
+PALETTES = {
+    # The default. Neutral grey chrome, a cool blue accent.
+    "graphite": {
+        "label": "Graphite",
+        "dark": {
+            "window": "#191a1f",
+            "surface": "#212328",
+            "surface_alt": "#2a2c33",
+            "hover": "#31343c",
+            "border": "#3a3d47",
+            "text": "#e8e9ec",
+            "muted": "#969aa5",
+            "accent": "#6cb6ff",
+            "accent_hover": "#8ec8ff",
+            "on_accent": "#0d1117",
+            "danger": "#ff7a85",
+        },
+        "light": {
+            "window": "#fbfbfd",
+            "surface": "#ffffff",
+            "surface_alt": "#f1f3f7",
+            "hover": "#e8ebf1",
+            "border": "#dde1e8",
+            "text": "#1c1f25",
+            "muted": "#6b7280",
+            "accent": "#1a6fd4",
+            "accent_hover": "#155ab0",
+            "on_accent": "#ffffff",
+            "danger": "#d0384a",
+        },
+    },
+    # Warm paper-and-ink. Easier on the eyes over a long evening.
+    "amber": {
+        "label": "Ink & Amber",
+        "dark": {
+            "window": "#1a1917",
+            "surface": "#221f1c",
+            "surface_alt": "#2b2723",
+            "hover": "#332e28",
+            "border": "#3d372f",
+            "text": "#ece7de",
+            "muted": "#a09889",
+            "accent": "#e9a86a",
+            "accent_hover": "#f4bd88",
+            "on_accent": "#1a1207",
+            "danger": "#ef6f63",
+        },
+        "light": {
+            "window": "#fcfbf8",
+            "surface": "#ffffff",
+            "surface_alt": "#f4f1ea",
+            "hover": "#ece7dd",
+            "border": "#e2dcd0",
+            "text": "#22201b",
+            "muted": "#736c60",
+            "accent": "#b06f13",
+            "accent_hover": "#8f5808",
+            "on_accent": "#ffffff",
+            "danger": "#c2452f",
+        },
+    },
+    "violet": {
+        "label": "Slate & Violet",
+        "dark": {
+            "window": "#17181d",
+            "surface": "#1e2027",
+            "surface_alt": "#272a33",
+            "hover": "#2f323d",
+            "border": "#383c48",
+            "text": "#e6e8ee",
+            "muted": "#9096a5",
+            "accent": "#a698ff",
+            "accent_hover": "#bcb0ff",
+            "on_accent": "#12101f",
+            "danger": "#ff7b93",
+        },
+        "light": {
+            "window": "#fafaff",
+            "surface": "#ffffff",
+            "surface_alt": "#f1f2f9",
+            "hover": "#e8e9f4",
+            "border": "#dcdeeb",
+            "text": "#1b1c24",
+            "muted": "#6a6e80",
+            "accent": "#5b4fd6",
+            "accent_hover": "#4a3fc0",
+            "on_accent": "#ffffff",
+            "danger": "#d23a5c",
+        },
+    },
 }
 
-LIGHT = {
-    "window": "#f9fafc",
-    "surface": "#ffffff",
-    "surface_alt": "#eef1f6",
-    "hover": "#e6eaf1",
-    "border": "#d9dde6",
-    "text": "#1f2329",
-    "muted": "#71798a",
-    "accent": "#0067c0",
-    "accent_hover": "#005aa8",
-    "on_accent": "#ffffff",
-    "danger": "#d84254",
-}
+DEFAULT_PALETTE = "graphite"
+
+# The eleven token names every palette half must define. Anything that reads
+# a colour reads one of these.
+TOKENS = tuple(PALETTES[DEFAULT_PALETTE]["dark"])
+
+# Kept as names because the shortcuts sheet and older call sites ask for the
+# two halves directly.
+DARK = PALETTES[DEFAULT_PALETTE]["dark"]
+LIGHT = PALETTES[DEFAULT_PALETTE]["light"]
+
+
+def palette_names() -> list[str]:
+    return list(PALETTES)
+
+
+def palette_label(name: str) -> str:
+    return PALETTES.get(name, PALETTES[DEFAULT_PALETTE])["label"]
+
+
+def palette_for(theme: str, name: str = DEFAULT_PALETTE) -> dict:
+    """The eleven tokens for one theme/palette pair.
+
+    An unknown palette falls back to the default rather than raising: a
+    settings file carried over from an older version names none of these.
+    """
+    chosen = PALETTES.get(name) or PALETTES[DEFAULT_PALETTE]
+    return chosen["light" if resolve_theme(theme) == "light" else "dark"]
 
 
 def resolve_theme(theme: str) -> str:
@@ -51,6 +149,9 @@ def resolve_theme(theme: str) -> str:
 # palette, so palette-based guesses go stale (light token colors were
 # painted on the dark theme that way).
 _current: dict = DARK
+# Tracked separately: with three palettes there is no single LIGHT dict to
+# compare identity against, and two palettes can share a token value.
+_current_light: bool = False
 
 
 def current_palette() -> dict:
@@ -58,12 +159,13 @@ def current_palette() -> dict:
 
 
 def current_is_light() -> bool:
-    return _current is LIGHT
+    return _current_light
 
 
-def build_stylesheet(theme: str = "dark") -> str:
-    global _current
-    t = LIGHT if resolve_theme(theme) == "light" else DARK
+def build_stylesheet(theme: str = "dark", palette: str = DEFAULT_PALETTE) -> str:
+    global _current, _current_light
+    _current_light = resolve_theme(theme) == "light"
+    t = palette_for(theme, palette)
     _current = t
     return f"""
 /* No font-family here: a stylesheet font would override the per-editor
@@ -106,23 +208,27 @@ QMenu::separator {{
     margin: 5px 10px;
 }}
 
+/* The format bar sits on the window colour, not the chrome colour, so it
+   reads as the top edge of the page rather than a second grey band. */
 #formatBar {{
-    background: {t['surface']};
+    background: {t['window']};
     border: none;
     border-bottom: 1px solid {t['border']};
-    spacing: 2px;
-    padding: 3px 10px;
+    spacing: 3px;
+    padding: 4px 12px;
 }}
 #formatBar QToolButton {{
     font-weight: 600;
-    padding: 4px 9px;
+    font-size: 11px;
+    padding: 3px 7px;
+    min-width: 20px;
 }}
 QToolButton {{
     background: transparent;
     color: {t['muted']};
     border: 1px solid transparent;
-    border-radius: 7px;
-    padding: 6px 10px;
+    border-radius: 6px;
+    padding: 5px 9px;
 }}
 QToolButton:hover {{
     background: {t['hover']};
@@ -139,36 +245,63 @@ QToolBar::separator {{
     margin: 5px 7px;
 }}
 
+/* Today's progress, shown at the right end of the tab strip. */
+#todayMeter {{
+    background: {t['surface_alt']};
+    border: none;
+    border-radius: 3px;
+    max-height: 5px;
+    min-height: 5px;
+    text-align: center;
+}}
+#todayMeter::chunk {{
+    background: {t['accent']};
+    border-radius: 3px;
+}}
+#todayMeterLabel {{
+    color: {t['text']};
+    font-size: 11px;
+}}
+#todayMeterCaption {{
+    color: {t['muted']};
+    font-size: 11px;
+}}
+
 #documentTabs::pane {{
     border: none;
     background: {t['window']};
 }}
+/* Tabs are separated pills on the chrome band, not a filing-cabinet row
+   of joined rectangles: no dividing lines, a rounded body, and the active
+   one lifted onto the window colour. */
 QTabBar {{
     background: {t['surface']};
+    qproperty-drawBase: 0;
 }}
 QTabBar::tab {{
-    background: {t['surface']};
+    background: transparent;
     color: {t['muted']};
-    border-right: 1px solid {t['border']};
-    border-bottom: 1px solid {t['border']};
-    min-width: 120px;
-    max-width: 240px;
-    padding: 9px 14px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    min-width: 90px;
+    max-width: 210px;
+    padding: 5px 9px;
+    margin: 5px 2px;
 }}
 QTabBar::tab:hover {{ background: {t['hover']}; color: {t['text']}; }}
 QTabBar::tab:selected {{
     background: {t['window']};
     color: {t['text']};
-    border-bottom: 2px solid {t['accent']};
+    border-color: {t['border']};
 }}
 QTabBar::close-button {{
     subcontrol-position: right;
 }}
 #newTabButton {{
-    color: {t['text']};
-    font-size: 18px;
+    color: {t['muted']};
+    font-size: 16px;
     font-weight: 400;
-    border-radius: 6px;
+    border-radius: 7px;
     padding: 0;
 }}
 #newTabButton:hover {{
@@ -192,24 +325,37 @@ QStatusBar {{
     background: {t['surface']};
     color: {t['muted']};
     border-top: 1px solid {t['border']};
-    min-height: 25px;
+    min-height: 30px;
 }}
+QStatusBar::item {{ border: none; }}
+/* No dividing rules between status items — the design separates them with
+   space, and gives the two clickable ones a pill so they read as buttons. */
 #statusLabel {{
     color: {t['muted']};
-    border-left: 1px solid {t['border']};
-    padding: 0 10px;
-}}
-#statusButton {{
-    background: transparent;
-    color: {t['muted']};
+    font-size: 11px;
     border: none;
-    border-left: 1px solid {t['border']};
-    border-radius: 0;
-    padding: 2px 10px;
+    padding: 0 6px;
+}}
+#savedLabel {{
+    font-size: 11px;
+    border: none;
+    padding: 0 6px;
+}}
+#savedLabel[dirty="true"] {{ color: {t['danger']}; }}
+#savedLabel[dirty="false"] {{ color: {t['muted']}; }}
+#statusButton {{
+    background: {t['surface_alt']};
+    color: {t['muted']};
+    border: 1px solid {t['border']};
+    border-radius: 9px;
+    font-size: 11px;
+    padding: 2px 9px;
+    margin: 0 2px;
 }}
 #statusButton:hover {{
     color: {t['accent']};
-    background: {t['hover']};
+    border-color: {t['accent']};
+    background: {t['surface_alt']};
 }}
 
 QLineEdit {{
@@ -299,9 +445,54 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
     color: {t['muted']};
     font-weight: 600;
 }}
+/* The search field sits on the window colour so it reads as a well cut
+   into the sidebar rather than another raised surface. */
 #sidebarSearch {{
-    background: {t['surface_alt']};
+    background: {t['window']};
+    border: 1px solid {t['border']};
+    border-radius: 8px;
+    padding: 5px 9px;
 }}
+#sidebarSearch:focus {{ border-color: {t['accent']}; }}
+
+/* Notes / Tasks / Calendar — one segmented control, not three stacked
+   panes fighting for the same column. */
+#sidebarSwitch {{
+    background: {t['surface_alt']};
+    border-radius: 9px;
+    padding: 3px;
+}}
+#sidebarSwitch QToolButton {{
+    background: transparent;
+    color: {t['muted']};
+    border: none;
+    border-radius: 7px;
+    padding: 5px 4px;
+    font-size: 11px;
+}}
+#sidebarSwitch QToolButton:hover {{ color: {t['text']}; }}
+#sidebarSwitch QToolButton:checked {{
+    background: {t['surface']};
+    color: {t['text']};
+    font-weight: 600;
+}}
+#sidebarSectionLabel {{
+    color: {t['muted']};
+    font-size: 10px;
+    font-weight: 600;
+    padding: 6px 8px 2px;
+}}
+#weekAheadRow {{ color: {t['text']}; font-size: 11px; }}
+#weekAheadCount {{ color: {t['muted']}; font-size: 11px; }}
+#todayChip {{
+    background: {t['surface_alt']};
+    border: 1px solid {t['border']};
+    border-radius: 10px;
+    color: {t['text']};
+    font-size: 11px;
+    padding: 2px 10px;
+}}
+#todayChip:hover {{ border-color: {t['accent']}; color: {t['accent']}; }}
 #calendarWeekday {{
     color: {t['muted']};
     font-size: 10px;
@@ -334,5 +525,54 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
 #quickOpenList::item:selected, #noteList::item:selected {{
     background: {t['hover']};
     color: {t['accent']};
+}}
+
+/* My Tasks (Ctrl+T) — the same segmented control as the sidebar, so the
+   two task surfaces read as one idea. */
+#taskSwitch {{
+    background: {t['surface_alt']};
+    border-radius: 9px;
+    padding: 3px;
+}}
+#taskSwitch QToolButton {{
+    background: transparent;
+    color: {t['muted']};
+    border: none;
+    border-radius: 7px;
+    padding: 5px 12px;
+    font-size: 12px;
+}}
+#taskSwitch QToolButton:hover {{ color: {t['text']}; }}
+#taskSwitch QToolButton:checked {{
+    background: {t['surface']};
+    color: {t['text']};
+    font-weight: 600;
+}}
+#taskHeading {{
+    color: {t['text']};
+    font-size: 17px;
+    font-weight: 700;
+}}
+#taskSummary {{
+    color: {t['muted']};
+    font-size: 11px;
+    border: none;
+    padding: 2px 4px;
+}}
+#timelineHour {{
+    color: {t['muted']};
+    font-size: 11px;
+}}
+#timelineHour[now="true"] {{ color: {t['accent']}; font-weight: 600; }}
+#splitColumn {{
+    background: {t['surface']};
+    border: 1px solid {t['border']};
+    border-radius: 10px;
+}}
+#splitColumnTitle {{
+    color: {t['muted']};
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 4px;
 }}
 """

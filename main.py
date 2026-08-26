@@ -136,7 +136,12 @@ def main() -> int:
     _mark("fonts")
 
     settings = sm.load()
-    app.setStyleSheet(build_stylesheet(settings.get("theme", "system")))
+    app.setStyleSheet(
+        build_stylesheet(
+            settings.get("theme", "system"),
+            settings.get("accent_palette", "graphite"),
+        )
+    )
     ui_font = QFont()
     ui_font.setFamilies(sm.font_chain(settings, extra=("sans-serif",)))
     ui_font.setPointSize(10)

@@ -18,7 +18,8 @@ stays out of the way, and keeps every note as a plain `.txt` / `.md` file.
   markers are hidden on screen but the file stays standard Markdown
 - Separate font choices for English and Persian text, so one script never
   forces a compromise on the other
-- Lines inside a ``` fence render in monospace and stay left-to-right
+- Lines inside a ``` fence render in monospace and stay left-to-right, and
+  `Ctrl+Shift+C` wraps the selection in one
 
 **Tasks**
 
@@ -28,12 +29,18 @@ stays out of the way, and keeps every note as a plain `.txt` / `.md` file.
 - Both calendars are accepted — a year below 1600 is read as Jalali, above it
   as Gregorian — and Persian digits work: `@۱۴۰۵/۰۶/۰۵`
 - **`Ctrl+T` — my tasks.** Every unfinished dated item across the notes
-  folder, grouped overdue / today / tomorrow / later. Selecting one opens the
-  note at that line
+  folder, in three readings: a list grouped overdue / today / tomorrow /
+  later, a today-and-ahead split, and a timeline of the day. Selecting one
+  opens the note at that line; "تعویق به فردا" pushes it a day
+- **Repeating tasks.** A `↻` after the stamp (`Ctrl+Shift+R`) makes a task
+  weekly, so a missed one moves to next week instead of sitting overdue
+  forever. `Ctrl+Shift+A` stamps a task with today's date
 - **`Ctrl+Shift+D` — today's note.** One file per day under `Daily`, named
   `1405-06-04.md` so it sorts, headed in Persian so it reads
 - A Jalali month calendar in the sidebar: days you have written are marked,
-  clicking one opens that day
+  clicking one opens that day, with the week ahead summarised below it
+- Today's progress sits at the end of the tab strip, and stays out of the way
+  on a day with nothing scheduled
 - Windows notifications when a task comes due, from the tray. Each reminder
   fires once; editing the task's text or date makes it a new one
 - Upcoming reminders are also registered with Windows Task Scheduler, so they
@@ -42,9 +49,11 @@ stays out of the way, and keeps every note as a plain `.txt` / `.md` file.
 
 **Finding things**
 
-- **`Ctrl+P` — go to file.** Type a few letters of a name and press Enter;
-  a folder name finds the notes inside it too
-- Notes sidebar (`Ctrl+Shift+B`) showing your folder tree, with full-text search
+- **`Ctrl+P` — go to anything.** Type a few letters and press Enter. Notes
+  come first (a folder name finds the notes inside it too), then whatever is
+  still open on your task list, then commands
+- Sidebar (`Ctrl+Shift+B`) with three panes behind one switch — notes with
+  full-text search, open tasks by urgency, and the calendar
 - Find and Replace with match case, whole word, wrap around (`F3` / `Shift+F3`)
 - Go To Line (`Ctrl+G`)
 
@@ -57,7 +66,10 @@ stays out of the way, and keeps every note as a plain `.txt` / `.md` file.
 
 **Everything else**
 
-- Dark / Light / System themes; toggleable line numbers; word wrap
+- Dark / Light / System themes, in three colour sets — Graphite, Ink & Amber
+  and Slate & Violet. Every colour in the app comes from one of eleven tokens,
+  so the whole interface changes together
+- Toggleable line numbers; word wrap
 - Zoom with `Ctrl+=` / `Ctrl+-` / `Ctrl+0` or Ctrl+mouse wheel
 - Time/Date (`F5`), word and character count in the status bar
 - Clickable status-bar chips for encoding and text direction
@@ -84,7 +96,7 @@ python -m pytest -q
 
 ```powershell
 python -m PyInstaller --clean --noconfirm notepad.spec   # → dist\NotepadPlus\NotepadPlus.exe
-ISCC.exe installer.iss                                   # → dist\NotepadPlus-Setup-3.6.0.exe
+ISCC.exe installer.iss                                   # → dist\NotepadPlus-Setup-3.7.0.exe
 dist\NotepadPlus\NotepadPlus.exe --smoke-test            # packaged startup check; exits with code 0
 ```
 

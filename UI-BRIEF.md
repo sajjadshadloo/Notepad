@@ -1,7 +1,14 @@
 # Notepad Plus — UI design brief
 
+> **Answered.** This brief was taken up by the Claude Design project
+> *«طراحی یادداشت و یادآوری»*, and the resulting design —
+> `Notepad Plus - Redesign.dc.html` — was implemented in **v3.7.0**. See
+> `PROJECT_STATUS.md` for what changed and what was deliberately left out.
+> Everything below describes the app as it stood at **v3.6.0**, before that
+> work; it is kept as the record of what was asked for.
+
 A design brief for redrawing the interface. Everything below describes the
-app **as it exists today** (v3.6.0), not a wish list.
+app **as it existed at v3.6.0**, not a wish list.
 
 ---
 

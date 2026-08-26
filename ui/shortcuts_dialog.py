@@ -1,7 +1,7 @@
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QDialog, QTextBrowser, QVBoxLayout
 
-from ui.styles import DARK, LIGHT, resolve_theme
+from ui.styles import DEFAULT_PALETTE, palette_for
 
 SECTIONS = [
     (
@@ -47,6 +47,9 @@ SECTIONS = [
             ("Ctrl+Shift+8", "Bullet list"),
             ("Ctrl+Shift+9", "To-do list"),
             ("Ctrl+D", "Toggle to-do done"),
+            ("Ctrl+Shift+A", "Add today's date stamp to a task"),
+            ("Ctrl+Shift+R", "Repeat a task weekly"),
+            ("Ctrl+Shift+C", "Wrap the selection in a code fence"),
             ("Ctrl+Right Shift", "Right-to-left paragraph"),
             ("Ctrl+Left Shift", "Left-to-right paragraph"),
         ],
@@ -64,11 +67,11 @@ SECTIONS = [
 
 
 class ShortcutsDialog(QDialog):
-    def __init__(self, theme: str, parent=None):
+    def __init__(self, theme: str, parent=None, palette: str = DEFAULT_PALETTE):
         super().__init__(parent)
         self.setWindowTitle("Keyboard Shortcuts")
         self.setMinimumSize(460, 520)
-        colors = LIGHT if resolve_theme(theme) == "light" else DARK
+        colors = palette_for(theme, palette)
 
         browser = QTextBrowser()
         browser.setOpenExternalLinks(False)
