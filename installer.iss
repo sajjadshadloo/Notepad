@@ -2,7 +2,7 @@
 ; Build:  ISCC.exe installer.iss   (after PyInstaller has produced dist\NotepadPlus\)
 
 #define MyAppName "Notepad Plus"
-#define MyAppVersion "3.7.1"
+#define MyAppVersion "3.7.2"
 #define MyAppPublisher "Sajjad"
 #define MyAppExeName "NotepadPlus.exe"
 
@@ -28,15 +28,24 @@ ArchitecturesInstallIn64BitMode=x64compatible
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional shortcuts:"
 
+[InstallDelete]
+; Drop earlier versions' icon files, so the folder does not collect one per
+; release. Runs before the new files are copied.
+Type: files; Name: "{app}\NotepadPlus.ico"
+Type: files; Name: "{app}\NotepadPlus-*.ico"
+
 [Files]
 ; onedir build: ship the whole PyInstaller output folder
 Source: "dist\NotepadPlus\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-; Standalone .ico so shortcuts get a fresh icon-cache entry on upgrades
-Source: "assets\icon.ico"; DestDir: "{app}"; DestName: "NotepadPlus.ico"; Flags: ignoreversion
+; The icon file carries the version in its NAME on purpose. Windows caches
+; shell icons by path, so shipping a changed icon at the same path leaves
+; every shortcut showing the old one until the user clears the icon cache.
+; A new path each release means the cache can never be stale.
+Source: "assets\icon.ico"; DestDir: "{app}"; DestName: "NotepadPlus-{#MyAppVersion}.ico"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\NotepadPlus.ico"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\NotepadPlus.ico"; Tasks: desktopicon
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\NotepadPlus-{#MyAppVersion}.ico"
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\NotepadPlus-{#MyAppVersion}.ico"; Tasks: desktopicon
 
 [Registry]
 ; "Open with" entry for text files
