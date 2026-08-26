@@ -68,7 +68,7 @@ from ui.styles import build_stylesheet
 
 
 APP_TITLE = "Notepad Plus"
-APP_VERSION = "3.5.0"
+APP_VERSION = "3.6.0"
 FILE_FILTER = "Text Files (*.txt);;Markdown (*.md *.markdown);;All Files (*.*)"
 ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 
@@ -1541,11 +1541,21 @@ class MainWindow(QMainWindow):
             return
         values = dialog.values()
         theme_changed = values["theme"] != self._cfg.get("theme")
+        scheduling_off = (
+            self._cfg.get("schedule_reminders", True)
+            and not values["schedule_reminders"]
+        )
         self._cfg.update(values)
         settings_manager.save(self._cfg)
         settings_manager.resolve_save_dir(self._cfg)
         if theme_changed:
             self.set_theme(values["theme"])
+        if self._reminders is not None:
+            self._reminders.set_scheduling(values["schedule_reminders"])
+            if scheduling_off:
+                # Leaving them registered would keep firing after the user
+                # asked for that to stop.
+                self._reminders.clear_schedule()
         self.word_wrap_action.setChecked(values["word_wrap"])
         self.toggle_word_wrap(values["word_wrap"])
         self._apply_editor_fonts()
@@ -1710,9 +1720,29 @@ class MainWindow(QMainWindow):
         """
         if self._reminders is not None or not QSystemTrayIcon.isSystemTrayAvailable():
             return
-        self._reminders = ReminderService(self._cfg["notes_root"], _app_icon(), self)
+        self._reminders = ReminderService(
+            self._cfg["notes_root"],
+            _app_icon(),
+            self,
+            schedule=self._cfg.get("schedule_reminders", True),
+        )
         self._reminders.task_activated.connect(self._open_task)
         self._reminders.start()
+
+    def show_scheduled_reminder(self, identifier: str):
+        """A Windows scheduled task fired --remind <id>.
+
+        The service only knows the id after a scan, so if the app was just
+        launched by the task itself we ask for one and announce afterwards.
+        """
+        self._start_reminders()
+        if self._reminders is None:
+            return
+        if not self._reminders.show_by_id(identifier):
+            self._reminders.scanned_once.connect(
+                lambda: self._reminders.show_by_id(identifier)
+            )
+            self._reminders.check_now()
 
     def _open_task(self, path: str, line_number: int):
         """Jump to the exact line a reminder came from."""

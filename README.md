@@ -36,6 +36,9 @@ stays out of the way, and keeps every note as a plain `.txt` / `.md` file.
   clicking one opens that day
 - Windows notifications when a task comes due, from the tray. Each reminder
   fires once; editing the task's text or date makes it a new one
+- Upcoming reminders are also registered with Windows Task Scheduler, so they
+  still arrive when the editor is closed. Turn it off in Settings; uninstalling
+  removes them
 
 **Finding things**
 
@@ -81,7 +84,7 @@ python -m pytest -q
 
 ```powershell
 python -m PyInstaller --clean --noconfirm notepad.spec   # → dist\NotepadPlus\NotepadPlus.exe
-ISCC.exe installer.iss                                   # → dist\NotepadPlus-Setup-3.5.0.exe
+ISCC.exe installer.iss                                   # → dist\NotepadPlus-Setup-3.6.0.exe
 dist\NotepadPlus\NotepadPlus.exe --smoke-test            # packaged startup check; exits with code 0
 ```
 

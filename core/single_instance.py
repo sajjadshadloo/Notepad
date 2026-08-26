@@ -21,6 +21,7 @@ class SingleInstanceGuard(QObject):
     """
 
     files_received = pyqtSignal(list)
+    reminder_received = pyqtSignal(str)
 
     def __init__(self, data_dir: Path | str, server_name: str = SERVER_NAME, parent=None):
         super().__init__(parent)
@@ -36,10 +37,15 @@ class SingleInstanceGuard(QObject):
     def acquire(self) -> bool:
         return self._lock.tryLock(0)
 
-    def notify_running_instance(self, files: list[str], attempts: int = 10) -> bool:
-        """Send file paths to the lock owner. Retries because the owner may
+    def notify_running_instance(
+        self, files: list[str], attempts: int = 10, reminder: str = ""
+    ) -> bool:
+        """Hand our arguments to the lock owner. Retries because the owner may
         still be starting up and not listening yet."""
-        payload = json.dumps({"files": files}).encode("utf-8")
+        message = {"files": files}
+        if reminder:
+            message["reminder"] = reminder
+        payload = json.dumps(message).encode("utf-8")
         for attempt in range(attempts):
             socket = QLocalSocket()
             socket.connectToServer(self._server_name)
@@ -85,12 +91,19 @@ class SingleInstanceGuard(QObject):
                     break
                 socket.waitForReadyRead(100)
             files: list[str] = []
+            reminder = ""
             try:
                 message = json.loads(bytes(socket.readAll().data()).decode("utf-8"))
                 files = [f for f in message.get("files", []) if isinstance(f, str)]
+                candidate = message.get("reminder", "")
+                reminder = candidate if isinstance(candidate, str) else ""
             except (ValueError, AttributeError):
                 log.warning("Ignoring malformed message from another instance.")
             socket.close()
+            if reminder:
+                # A scheduled reminder fired while the app was already open.
+                self.reminder_received.emit(reminder)
+                continue
             # Empty list still means "bring the window to the front".
             self.files_received.emit(files)
 

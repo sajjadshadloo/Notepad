@@ -121,6 +121,16 @@ class SettingsDialog(QDialog):
         )
         files_form.addRow("Text direction:", self.direction_combo)
 
+        self.schedule_check = QCheckBox(
+            "Remind me even when Notepad Plus is closed"
+        )
+        self.schedule_check.setToolTip(
+            "Registers upcoming reminders with Windows Task Scheduler. "
+            "Turning this off removes the ones already registered."
+        )
+        self.schedule_check.setChecked(bool(settings.get("schedule_reminders", True)))
+        files_form.addRow(self.schedule_check)
+
         self.wrap_check = QCheckBox("Wrap long lines")
         self.wrap_check.setChecked(bool(settings.get("word_wrap", True)))
         files_form.addRow(self.wrap_check)
@@ -214,6 +224,7 @@ class SettingsDialog(QDialog):
             "font_size": self.size_spin.value(),
             "word_wrap": self.wrap_check.isChecked(),
             "default_direction": self.direction_combo.currentData(),
+            "schedule_reminders": self.schedule_check.isChecked(),
             "default_save_dir": (
                 self.folder_edit.text().strip() or settings_manager.DEFAULT_SAVE_DIR
             ),

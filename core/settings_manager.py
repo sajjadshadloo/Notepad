@@ -46,6 +46,9 @@ DEFAULTS = {
     # document on one side until you say otherwise. Code blocks stay LTR
     # either way, and a per-file override is remembered in the note index.
     "default_direction": "rtl",
+    # Mirror upcoming reminders into Windows Task Scheduler so they still
+    # arrive with the editor closed. Off means in-app reminders only.
+    "schedule_reminders": True,
 }
 
 DIRECTION_MODES = ("rtl", "ltr", "auto")

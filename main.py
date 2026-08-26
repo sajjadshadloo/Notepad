@@ -112,10 +112,16 @@ def main() -> int:
     initial_files = [
         str(Path(arg).resolve()) for arg in sys.argv[1:] if os.path.isfile(arg)
     ]
+    # A scheduled reminder launches us with --remind <id>.
+    reminder = ""
+    if "--remind" in sys.argv:
+        position = sys.argv.index("--remind")
+        if position + 1 < len(sys.argv):
+            reminder = sys.argv[position + 1]
 
     guard = SingleInstanceGuard(sm.app_data_dir())
     if not guard.acquire():
-        if guard.notify_running_instance(initial_files):
+        if guard.notify_running_instance(initial_files, reminder=reminder):
             return 0
         log.warning(
             "Another instance holds the lock but is not answering; "
@@ -140,6 +146,9 @@ def main() -> int:
     window = MainWindow(initial_files)
     _mark("MainWindow")
     guard.files_received.connect(window.open_from_another_instance)
+    guard.reminder_received.connect(window.show_scheduled_reminder)
+    if reminder:
+        window.show_scheduled_reminder(reminder)
     window.show()
     _mark("show")
     # Logged from the event loop so it measures the moment the window is
