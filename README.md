@@ -20,6 +20,19 @@ stays out of the way, and keeps every note as a plain `.txt` / `.md` file.
   forces a compromise on the other
 - Lines inside a ``` fence render in monospace and stay left-to-right
 
+**Tasks**
+
+- Any checkbox becomes a dated task by ending it with an `@` stamp:
+  `- [ ] تحویل سایت @1405/06/05 10:00`. The file stays plain Markdown, so a
+  task is never locked inside this app
+- Both calendars are accepted — a year below 1600 is read as Jalali, above it
+  as Gregorian — and Persian digits work: `@۱۴۰۵/۰۶/۰۵`
+- **`Ctrl+T` — my tasks.** Every unfinished dated item across the notes
+  folder, grouped overdue / today / tomorrow / later. Selecting one opens the
+  note at that line
+- Windows notifications when a task comes due, from the tray. Each reminder
+  fires once; editing the task's text or date makes it a new one
+
 **Finding things**
 
 - **`Ctrl+P` — go to file.** Type a few letters of a name and press Enter;
@@ -64,7 +77,7 @@ python -m pytest -q
 
 ```powershell
 python -m PyInstaller --clean --noconfirm notepad.spec   # → dist\NotepadPlus\NotepadPlus.exe
-ISCC.exe installer.iss                                   # → dist\NotepadPlus-Setup-3.2.0.exe
+ISCC.exe installer.iss                                   # → dist\NotepadPlus-Setup-3.4.0.exe
 dist\NotepadPlus\NotepadPlus.exe --smoke-test            # packaged startup check; exits with code 0
 ```
 

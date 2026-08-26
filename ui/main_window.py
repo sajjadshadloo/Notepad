@@ -28,6 +28,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSplitter,
+    QSystemTrayIcon,
     QTabBar,
     QTabWidget,
     QToolBar,
@@ -57,6 +58,8 @@ from core.recovery_manager import (
 )
 from ui.document_tab import DocumentTab, editor_font
 from ui.quick_open import QuickOpenDialog
+from ui.reminder_service import ReminderService
+from ui.today_view import TodayDialog
 from ui.settings_dialog import SettingsDialog
 from ui.shortcuts_dialog import ShortcutsDialog
 from ui.sidebar import Sidebar
@@ -64,7 +67,7 @@ from ui.styles import build_stylesheet
 
 
 APP_TITLE = "Notepad Plus"
-APP_VERSION = "3.3.0"
+APP_VERSION = "3.4.0"
 FILE_FILTER = "Text Files (*.txt);;Markdown (*.md *.markdown);;All Files (*.*)"
 ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 
@@ -314,6 +317,7 @@ class MainWindow(QMainWindow):
         # other windows — the app then looks like it simply failed to start.
         # showEvent runs them once the window is actually up.
         self._startup_prompts_shown = False
+        self._reminders: ReminderService | None = None
 
     # Actions and chrome
 
@@ -332,6 +336,7 @@ class MainWindow(QMainWindow):
         self.quick_open_action = self._action(
             "&Go to File…", self.show_quick_open, "Ctrl+P"
         )
+        self.today_action = self._action("My &Tasks…", self.show_today, "Ctrl+T")
         self.save_action = self._action("&Save", self.save_current, "Ctrl+S")
         self.save_as_action = self._action(
             "Save &As…", self.save_current_as, "Ctrl+Shift+S"
@@ -524,6 +529,7 @@ class MainWindow(QMainWindow):
         file_menu.addAction(self.new_action)
         file_menu.addAction(self.open_action)
         file_menu.addAction(self.quick_open_action)
+        file_menu.addAction(self.today_action)
         file_menu.addSeparator()
         file_menu.addAction(self.save_action)
         file_menu.addAction(self.save_as_action)
@@ -848,6 +854,12 @@ class MainWindow(QMainWindow):
         )
         for path in paths:
             self.open_file(path)
+
+    def show_today(self):
+        """Ctrl+T — the dated to-do items from every note, in one place."""
+        dialog = TodayDialog(self._cfg["notes_root"], self)
+        dialog.task_chosen.connect(self._open_task)
+        dialog.exec()
 
     def show_quick_open(self):
         """Ctrl+P — find a note by name without leaving the keyboard."""
@@ -1479,6 +1491,8 @@ class MainWindow(QMainWindow):
     def _sidebar_root_changed(self, folder: str):
         self._cfg["notes_root"] = folder
         settings_manager.save(self._cfg)
+        if self._reminders is not None:
+            self._reminders.set_root(folder)
 
     def set_theme(self, theme: str):
         self._cfg["theme"] = theme
@@ -1654,6 +1668,37 @@ class MainWindow(QMainWindow):
         self.activateWindow()
         self._offer_recovery()
         QTimer.singleShot(250, self._offer_legacy_migration)
+        self._start_reminders()
+
+    def _start_reminders(self):
+        """Begin watching dated to-do items.
+
+        Started here rather than in __init__ so nothing about it can show up
+        in startup time; the service itself defers its first scan further and
+        does the folder walk on a worker thread.
+        """
+        if self._reminders is not None or not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        self._reminders = ReminderService(self._cfg["notes_root"], _app_icon(), self)
+        self._reminders.task_activated.connect(self._open_task)
+        self._reminders.start()
+
+    def _open_task(self, path: str, line_number: int):
+        """Jump to the exact line a reminder came from."""
+        if not self.open_file(path):
+            return
+        tab = self.current_document()
+        block = tab.editor.document().findBlockByNumber(line_number)
+        if block.isValid():
+            tab.editor.setTextCursor(QTextCursor(block))
+        tab.editor.setFocus()
+        self.setWindowState(
+            (self.windowState() & ~Qt.WindowState.WindowMinimized)
+            | Qt.WindowState.WindowActive
+        )
+        self.show()
+        self.raise_()
+        self.activateWindow()
 
     def _offer_recovery(self) -> bool:
         recoveries = load_recoveries()
@@ -1773,6 +1818,8 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent):
         self._closing_application = True
+        if self._reminders is not None:
+            self._reminders.stop()
         self._write_recoveries()
         while self.tabs.count():
             if not self.close_tab(0, create_replacement=False):
