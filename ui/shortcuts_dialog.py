@@ -58,7 +58,6 @@ SECTIONS = [
             ("Ctrl+0", "Restore default zoom"),
             ("Ctrl+Mouse Wheel", "Zoom"),
             ("Ctrl+Shift+B", "Toggle sidebar"),
-            ("Ctrl+Shift+M", "Markdown preview"),
         ],
     ),
 ]
