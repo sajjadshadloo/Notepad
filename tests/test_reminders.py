@@ -79,3 +79,70 @@ def test_today_view_grouping():
     assert [group_of(t, now) for t in tasks] == [
         "عقب‌افتاده", "امروز", "فردا", "بعداً", "بدون تاریخ",
     ]
+
+
+class _FakeTray:
+    def __init__(self):
+        self.messages = []
+
+    def showMessage(self, title, body, icon, timeout):
+        self.messages.append((title, body))
+
+
+def _service(tmp_path, monkeypatch):
+    """A ReminderService with the tray and scheduler stubbed out."""
+    monkeypatch.setenv("NOTEPAD_DATA_DIR", str(tmp_path))
+    from PyQt6.QtGui import QIcon
+
+    import ui.reminder_service as module
+
+    monkeypatch.setattr(module.win_scheduler, "available", lambda: False)
+    service = module.ReminderService(str(tmp_path), QIcon(), schedule=False)
+    service._tray = _FakeTray()
+    return service
+
+
+def test_a_reminder_is_announced_once(tmp_path, monkeypatch, qapp):
+    """The --remind launch used to announce without recording it, so the
+    next scan a minute later said the same thing again."""
+    from datetime import datetime, timedelta
+
+    from core.tasks import parse_document
+    from core.jalali import format_date
+
+    service = _service(tmp_path, monkeypatch)
+    past = format_date(datetime.now().date(), persian_digits=False)
+    tasks = parse_document(f"- [ ] کار @{past} 00:01", "C:/n/a.md")
+
+    service._handle_tasks(tasks)
+    assert len(service._tray.messages) == 1
+
+    # A second scan of the same still-unfinished task must stay quiet.
+    service._handle_tasks(tasks)
+    assert len(service._tray.messages) == 1
+
+
+def test_remind_by_id_does_not_double_announce(tmp_path, monkeypatch, qapp):
+    from datetime import datetime
+
+    import core.win_scheduler as win_scheduler
+    from core.jalali import format_date
+    from core.tasks import parse_document
+
+    service = _service(tmp_path, monkeypatch)
+    today = format_date(datetime.now().date(), persian_digits=False)
+    tasks = parse_document(f"- [ ] کار @{today} 00:01", "C:/n/a.md")
+    identifier = win_scheduler.task_id(tasks[0].key())
+
+    service._by_id = {identifier: tasks[0]}
+    assert service.show_by_id(identifier)
+    assert len(service._tray.messages) == 1
+
+    # The scan that follows the launch must not repeat it.
+    service._handle_tasks(tasks)
+    assert len(service._tray.messages) == 1
+
+
+def test_an_unknown_id_is_reported(tmp_path, monkeypatch, qapp):
+    service = _service(tmp_path, monkeypatch)
+    assert service.show_by_id("nosuchid") is False

@@ -108,16 +108,31 @@ class ReminderService(QObject):
         self.scanned_once.emit()
         if self._schedule:
             self._sync_schedule(tasks)
-        due = due_within(tasks, datetime.now(), ahead_minutes=LEAD_MINUTES)
-        fresh = [task for task in due if task.key() not in self._notified]
+        self._notify(due_within(tasks, datetime.now(), ahead_minutes=LEAD_MINUTES))
+
+    def _notify(self, tasks: list) -> bool:
+        """Announce whatever has not been announced yet, and record it.
+
+        Both routes in — the periodic scan and a --remind launch — go through
+        here. When they did not, a scheduled reminder announced itself
+        without being recorded and the next scan, a minute later, said it all
+        over again.
+        """
+        fresh = [task for task in tasks if task.key() not in self._notified]
         if not fresh:
-            return
+            return False
         for task in fresh:
             self._notified.add(task.key())
         reminder_store.save(self._notified)
         self._announce(fresh)
+        return True
 
     def _announce(self, tasks: list):
+        # Logged so a missed reminder can be told apart from one that fired
+        # into a disabled notification area.
+        log.info(
+            "Notifying: %s", ", ".join(repr(task.text) for task in tasks[:4])
+        )
         self._last_task = tasks[0]
         if len(tasks) == 1:
             title = "یادآوری"
@@ -173,7 +188,9 @@ class ReminderService(QObject):
         task = self._by_id.get(identifier)
         if task is None:
             return False
-        self._announce([task])
+        # Returns True even when it was already announced: the caller only
+        # needs to know the id was recognised, so it stops waiting for a scan.
+        self._notify([task])
         return True
 
     def _open_last(self):
