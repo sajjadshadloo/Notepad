@@ -1,23 +1,28 @@
 import logging
 import os
 import sys
-import time
-
-_PROCESS_STARTED_AT = time.perf_counter()
-
 sys.path.insert(0, os.path.dirname(__file__))
 
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+from core.startup_trace import ENABLED as _TRACE, elapsed_ms, mark as _mark, marks
+
 from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QFont, QIcon
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
+_mark("import Qt")
+
 import core.settings_manager as sm
 from core.single_instance import SingleInstanceGuard
+
+_mark("import core")
+
 from ui.main_window import APP_VERSION, MainWindow, _load_bundled_fonts
 from ui.styles import build_stylesheet
+
+_mark("import ui")
 
 log = logging.getLogger("notepad")
 
@@ -77,6 +82,17 @@ def _install_excepthook(log_file: Path):
     sys.excepthook = hook
 
 
+def _report_startup():
+    total = elapsed_ms()
+    log.info("Startup ready in %.1f ms", total)
+    if not _TRACE:
+        return
+    previous = 0.0
+    for label, at in [*marks(), ("first paint", total)]:
+        log.info("  %-16s %7.1f ms  (at %7.1f)", label, at - previous, at)
+        previous = at
+
+
 def main() -> int:
     _set_windows_app_id()
     app = QApplication(sys.argv)
@@ -86,8 +102,10 @@ def main() -> int:
     app.setOrganizationName("Sajjad")
     app.setOrganizationDomain("local.notepad")
 
+    _mark("QApplication")
     log_file = _setup_logging()
     _install_excepthook(log_file)
+    _mark("logging")
 
     # Resolve now: a second instance forwards these paths to the first one,
     # which has a different working directory.
@@ -106,8 +124,10 @@ def main() -> int:
     else:
         guard.listen()
 
+    _mark("single instance")
     app.setWindowIcon(app_icon())
     _load_bundled_fonts()
+    _mark("fonts")
 
     settings = sm.load()
     app.setStyleSheet(build_stylesheet(settings.get("theme", "system")))
@@ -116,17 +136,17 @@ def main() -> int:
     ui_font.setPointSize(10)
     app.setFont(ui_font)
 
+    _mark("theme")
     window = MainWindow(initial_files)
+    _mark("MainWindow")
     guard.files_received.connect(window.open_from_another_instance)
     window.show()
+    _mark("show")
     # Logged from the event loop so it measures the moment the window is
     # actually usable, not just the moment show() returned.
     QTimer.singleShot(
         0,
-        lambda: log.info(
-            "Startup ready in %.1f ms",
-            (time.perf_counter() - _PROCESS_STARTED_AT) * 1000,
-        ),
+        lambda: _report_startup(),
     )
     if "--smoke-test" in sys.argv:
         QTimer.singleShot(0, app.quit)

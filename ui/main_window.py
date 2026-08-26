@@ -64,7 +64,7 @@ from ui.styles import build_stylesheet
 
 
 APP_TITLE = "Notepad Plus"
-APP_VERSION = "3.2.0"
+APP_VERSION = "3.3.0"
 FILE_FILTER = "Text Files (*.txt);;Markdown (*.md *.markdown);;All Files (*.*)"
 ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 
@@ -276,7 +276,11 @@ class MainWindow(QMainWindow):
         # and the delete when nothing has moved.
         self._recovery_marks: dict[str, tuple] = {}
         self._recovery_on_disk: set[str] = set()
-        self._find_dialog = FindReplaceDialog(self)
+        # Built on first Ctrl+F, not here. Constructing the first QDialog
+        # makes Qt load its widget-style and platform-theme machinery, which
+        # in the packaged build cost ~1.3s — 86% of startup — for a dialog
+        # most sessions never open.
+        self._find_dialog_instance: FindReplaceDialog | None = None
         # Zero-interval single shot: restarting it before it fires simply
         # replaces the pending call, so a burst of edits produces one refresh.
         self._status_timer = QTimer(self, singleShot=True, interval=0)
@@ -1180,6 +1184,12 @@ class MainWindow(QMainWindow):
         if cursor.hasSelection():
             cursor.removeSelectedText()
 
+    @property
+    def _find_dialog(self) -> FindReplaceDialog:
+        if self._find_dialog_instance is None:
+            self._find_dialog_instance = FindReplaceDialog(self)
+        return self._find_dialog_instance
+
     def show_find_dialog(self):
         self._show_search_dialog(focus_replace=False)
 
@@ -1203,14 +1213,19 @@ class MainWindow(QMainWindow):
         target.setFocus()
         target.selectAll()
 
+    def _has_search_term(self) -> bool:
+        """Whether F3 has something to repeat — without building the dialog."""
+        dialog = self._find_dialog_instance
+        return dialog is not None and bool(dialog.find_input.text())
+
     def find_next(self):
-        if not self._find_dialog.find_input.text():
+        if not self._has_search_term():
             self.show_find_dialog()
             return
         self._find_dialog.find_next()
 
     def find_previous(self):
-        if not self._find_dialog.find_input.text():
+        if not self._has_search_term():
             self.show_find_dialog()
             return
         self._find_dialog.find_previous()
