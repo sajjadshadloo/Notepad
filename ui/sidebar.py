@@ -32,6 +32,7 @@ from ui.calendar_panel import CalendarPanel
 from core.search_service import search_notes
 from core.jalali import to_persian_digits
 from ui.styles import current_palette
+from ui.task_rows import TaskList, when_label
 
 NOTE_EXTENSIONS = (".txt", ".md", ".markdown")
 
@@ -187,10 +188,7 @@ class Sidebar(QWidget):
         column = QVBoxLayout(pane)
         column.setContentsMargins(0, 0, 0, 0)
         column.setSpacing(6)
-        self.task_list = QTreeWidget()
-        self.task_list.setObjectName("noteList")
-        self.task_list.setHeaderHidden(True)
-        self.task_list.setIndentation(10)
+        self.task_list = TaskList()
         self.task_list.itemClicked.connect(self._activate_task)
         self.task_list.itemActivated.connect(self._activate_task)
         column.addWidget(self.task_list, 1)
@@ -437,9 +435,6 @@ class Sidebar(QWidget):
     def _rebuild_task_list(self):
         self.task_list.clear()
         now = datetime.now()
-        palette = current_palette()
-        overdue_color = QColor(palette["danger"])
-        muted = QColor(palette["muted"])
 
         buckets: dict[str, list[Task]] = {}
         for task in self._tasks:
@@ -449,32 +444,20 @@ class Sidebar(QWidget):
             tasks = buckets.get(title)
             if not tasks:
                 continue
-            header = QTreeWidgetItem(
-                [f"{title}   {to_persian_digits(str(len(tasks)))}"]
+            self.task_list.add_header(
+                title,
+                to_persian_digits(str(len(tasks))),
+                urgent=title == "عقب‌افتاده",
             )
-            bold = QFont(self.task_list.font())
-            bold.setBold(True)
-            header.setFont(0, bold)
-            header.setForeground(
-                0, overdue_color if title == "عقب‌افتاده" else muted
-            )
-            self.task_list.addTopLevelItem(header)
-            header.setExpanded(True)
             for task in tasks:
-                item = QTreeWidgetItem([f"☐  {task.text}"])
-                item.setData(
-                    0, Qt.ItemDataRole.UserRole, (task.path, task.line_number)
+                self.task_list.add_task(
+                    task,
+                    when=when_label(task, now),
+                    tooltip=f"{task.text}\n{Path(task.path).name}",
                 )
-                item.setToolTip(0, Path(task.path).name)
-                item.setTextAlignment(
-                    0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-                )
-                if task.overdue:
-                    item.setForeground(0, overdue_color)
-                header.addChild(item)
 
         if not self._tasks:
-            self.task_list.addTopLevelItem(QTreeWidgetItem(["کاری باقی نمانده ✓"]))
+            self.task_list.add_empty("کاری باقی نمانده ✓")
 
     def _rebuild_week_ahead(self):
         """One row per day for the coming week, with how much is due on it."""
@@ -511,8 +494,8 @@ class Sidebar(QWidget):
             row.setContentsMargins(2, 0, 2, 0)
             self._week_rows.addWidget(holder)
 
-    def _activate_task(self, item: QTreeWidgetItem):
-        payload = item.data(0, Qt.ItemDataRole.UserRole)
+    def _activate_task(self, item):
+        payload = self.task_list.payload_of(item)
         if payload:
             self.task_activated.emit(payload[0], payload[1])
 

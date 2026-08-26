@@ -14,7 +14,6 @@ from datetime import datetime
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -22,16 +21,14 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QStackedWidget,
     QToolButton,
-    QTreeWidget,
-    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
-from core.jalali import format_date, format_long, to_persian_digits
-from core.tasks import REPEAT_MARK, Task, group_of, sort_for_today
+from core.jalali import format_long, to_persian_digits
+from core.tasks import Task, group_of, sort_for_today
 from ui.reminder_service import scan_folder
-from ui.styles import current_palette
+from ui.task_rows import TaskList, when_label
 
 # Urgency order, and the order the groups are shown in.
 GROUP_ORDER = ("عقب‌افتاده", "امروز", "فردا", "بعداً", "بدون تاریخ")
@@ -41,19 +38,6 @@ MODES = (("list", "لیست"), ("split", "امروز و آینده"), ("timeline
 # The spine of a working day. Hours outside it appear only when something is
 # actually scheduled there, so the timeline never scrolls through dead time.
 WORKDAY_HOURS = (8, 9, 10, 11, 12, 14, 16, 18)
-
-
-def when_label(task: Task, now: datetime | None = None) -> str:
-    """The due moment as the user would write it, or '' for an undated task."""
-    due = task.next_due(now)
-    if due is None:
-        return ""
-    text = format_date(due.date())
-    if task.has_time:
-        text += to_persian_digits(due.strftime(" %H:%M"))
-    if task.repeats:
-        text += " " + REPEAT_MARK
-    return text
 
 
 class TodayDialog(QDialog):
@@ -126,11 +110,9 @@ class TodayDialog(QDialog):
         row.addWidget(switch)
         return row
 
-    def _make_tree(self) -> QTreeWidget:
-        tree = QTreeWidget()
-        tree.setObjectName("noteList")
-        tree.setHeaderHidden(True)
-        tree.setIndentation(12)
+    def _make_tree(self) -> TaskList:
+        """One task list, drawn by the shared delegate."""
+        tree = TaskList()
         tree.itemActivated.connect(self._choose)
         tree.itemClicked.connect(self._choose)
         tree.currentItemChanged.connect(lambda current, _prev: self._select(current))
@@ -208,33 +190,12 @@ class TodayDialog(QDialog):
         self._fill_summary(now)
         self._set_detail(None)
 
-    def _colors(self) -> tuple[QColor, QColor]:
-        palette = current_palette()
-        return QColor(palette["danger"]), QColor(palette["muted"])
-
-    def _task_item(self, task: Task, now: datetime) -> QTreeWidgetItem:
-        overdue, _muted = self._colors()
-        label = task.text
-        when = when_label(task, now)
-        if when:
-            label = f"{label}   ·   {when}"
-        item = QTreeWidgetItem([f"☐  {label}"])
-        item.setData(0, Qt.ItemDataRole.UserRole, task)
-        item.setToolTip(0, f"{Path(task.path).name}  ({task.path})")
-        if task.overdue:
-            item.setForeground(0, overdue)
-        return item
-
-    def _group_header(self, title: str, count: int, tree: QTreeWidget):
-        overdue, muted = self._colors()
-        parent = QTreeWidgetItem([f"{title}   {to_persian_digits(str(count))}"])
-        bold = QFont(tree.font())
-        bold.setBold(True)
-        parent.setFont(0, bold)
-        parent.setForeground(0, overdue if title == "عقب‌افتاده" else muted)
-        tree.addTopLevelItem(parent)
-        parent.setExpanded(True)
-        return parent
+    def _add_task(self, tree, task: Task, now: datetime):
+        tree.add_task(
+            task,
+            when=when_label(task, now),
+            tooltip=task.text + chr(10) + Path(task.path).name,
+        )
 
     def _fill_list(self, now: datetime):
         self._list_tree.clear()
@@ -245,32 +206,37 @@ class TodayDialog(QDialog):
             tasks = buckets.get(title)
             if not tasks:
                 continue
-            parent = self._group_header(title, len(tasks), self._list_tree)
+            self._list_tree.add_header(
+                title,
+                to_persian_digits(str(len(tasks))),
+                urgent=title == "عقب‌افتاده",
+            )
             for task in tasks:
-                parent.addChild(self._task_item(task, now))
+                self._add_task(self._list_tree, task, now)
         if not self._tasks:
-            self._list_tree.addTopLevelItem(QTreeWidgetItem(["کاری باقی نمانده ✓"]))
+            self._list_tree.add_empty("کاری باقی نمانده ✓")
 
     def _fill_split(self, now: datetime):
         self._today_tree.clear()
         self._ahead_tree.clear()
         for task in self._tasks:
             due = task.next_due(now)
-            if due is not None and due.date() <= now.date():
-                self._today_tree.addTopLevelItem(self._task_item(task, now))
-            else:
-                self._ahead_tree.addTopLevelItem(self._task_item(task, now))
+            target = (
+                self._today_tree
+                if due is not None and due.date() <= now.date()
+                else self._ahead_tree
+            )
+            self._add_task(target, task, now)
         for tree, empty in (
             (self._today_tree, "امروز کاری نیست ✓"),
             (self._ahead_tree, "چیزی در پیش نیست"),
         ):
-            if tree.topLevelItemCount() == 0:
-                tree.addTopLevelItem(QTreeWidgetItem([empty]))
+            if tree.count() == 0:
+                tree.add_empty(empty)
 
     def _fill_timeline(self, now: datetime):
         """Today's dated work against the clock, undated work at the end."""
         self._timeline_tree.clear()
-        _overdue, muted = self._colors()
         today: dict[int, list[Task]] = {}
         loose: list[Task] = []
         for task in self._tasks:
@@ -280,21 +246,19 @@ class TodayDialog(QDialog):
             elif due is None:
                 loose.append(task)
         for hour in sorted(set(WORKDAY_HOURS) | set(today)):
-            parent = QTreeWidgetItem([to_persian_digits(f"{hour:02d}:00")])
-            bold = QFont(self._timeline_tree.font())
-            bold.setBold(hour == now.hour)
-            parent.setFont(0, bold)
-            parent.setForeground(0, muted)
-            self._timeline_tree.addTopLevelItem(parent)
-            parent.setExpanded(True)
-            for task in today.get(hour, []):
-                parent.addChild(self._task_item(task, now))
+            at_hour = today.get(hour, [])
+            self._timeline_tree.add_header(
+                to_persian_digits("%02d:00" % hour),
+                to_persian_digits(str(len(at_hour))) if at_hour else "",
+            )
+            for task in at_hour:
+                self._add_task(self._timeline_tree, task, now)
         if loose:
-            parent = self._group_header(
-                "بدون ساعت", len(loose), self._timeline_tree
+            self._timeline_tree.add_header(
+                "بدون ساعت", to_persian_digits(str(len(loose)))
             )
             for task in loose:
-                parent.addChild(self._task_item(task, now))
+                self._add_task(self._timeline_tree, task, now)
 
     def _fill_summary(self, now: datetime):
         overdue = sum(1 for t in self._tasks if t.overdue)
@@ -312,9 +276,31 @@ class TodayDialog(QDialog):
 
     # Selection
 
-    def _select(self, item: QTreeWidgetItem | None):
-        task = item.data(0, Qt.ItemDataRole.UserRole) if item else None
-        self._set_detail(task if isinstance(task, Task) else None)
+    def _task_at(self, item) -> Task | None:
+        """The task a row stands for, whichever of the four lists it is in."""
+        if item is None:
+            return None
+        for tree in (
+            self._list_tree,
+            self._today_tree,
+            self._ahead_tree,
+            self._timeline_tree,
+        ):
+            payload = tree.payload_of(item)
+            if payload:
+                path, line = payload
+                return next(
+                    (
+                        t
+                        for t in self._tasks
+                        if t.path == path and t.line_number == line
+                    ),
+                    None,
+                )
+        return None
+
+    def _select(self, item):
+        self._set_detail(self._task_at(item))
 
     def _set_detail(self, task: Task | None):
         self._selected = task
@@ -325,9 +311,9 @@ class TodayDialog(QDialog):
         self.snooze_button.setEnabled(bool(task and task.due))
         self.open_button.setEnabled(task is not None)
 
-    def _choose(self, item: QTreeWidgetItem):
-        task = item.data(0, Qt.ItemDataRole.UserRole)
-        if isinstance(task, Task):
+    def _choose(self, item):
+        task = self._task_at(item)
+        if task is not None:
             self.task_chosen.emit(task.path, task.line_number)
             self.accept()
 

@@ -3,14 +3,17 @@ import os
 from datetime import datetime
 from pathlib import Path
 
-from PyQt6.QtCore import QByteArray, QPoint, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QByteArray, QPoint, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (
     QAction,
     QActionGroup,
     QCloseEvent,
+    QColor,
     QFontDatabase,
     QIcon,
     QKeySequence,
+    QPainter,
+    QPixmap,
     QTextCursor,
     QTextDocument,
 )
@@ -70,12 +73,15 @@ from ui.today_view import TodayDialog
 from ui.settings_dialog import SettingsDialog
 from ui.shortcuts_dialog import ShortcutsDialog
 from ui.sidebar import Sidebar
-from ui.styles import build_stylesheet
+from ui.styles import build_stylesheet, current_palette
 
 log = logging.getLogger(__name__)
 
+# The status dot the design puts before a tab name.
+TAB_DOT_SIZE = 6
+
 APP_TITLE = "Notepad Plus"
-APP_VERSION = "3.7.0"
+APP_VERSION = "3.7.1"
 FILE_FILTER = "Text Files (*.txt);;Markdown (*.md *.markdown);;All Files (*.*)"
 ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 
@@ -280,6 +286,8 @@ class MainWindow(QMainWindow):
         self._file_monitor.changed.connect(self._external_file_changed)
         self._file_monitor.missing.connect(self._external_file_missing)
         self._closing_application = False
+        # Tab status dots, keyed by colour; dropped when the palette changes.
+        self._dot_icons: dict = {}
         self._zoom_steps = 0
         self._recently_closed: list[str] = []
         # Fingerprint of the last snapshot written per tab, plus which tabs
@@ -689,6 +697,7 @@ class MainWindow(QMainWindow):
         self.tabs.setTabsClosable(True)
         self.tabs.setMovable(True)
         self.tabs.setDocumentMode(True)
+        self.tabs.setIconSize(QSize(TAB_DOT_SIZE, TAB_DOT_SIZE))
         self.tabs.tabCloseRequested.connect(self.close_tab)
         self.tabs.currentChanged.connect(self._current_tab_changed)
         tab_bar = self.tabs.tabBar()
@@ -1333,16 +1342,47 @@ class MainWindow(QMainWindow):
             "The missing file is kept open as an unsaved document.", 5000
         )
 
+    def _dot_icon(self, modified: bool) -> QIcon:
+        """The 6px status dot the design puts before a tab's name.
+
+        Drawn rather than prefixed as "●": a bullet in the title lands on the
+        wrong side of a Persian name, and only having one when the document is
+        dirty made every tab jump a few pixels wider as you typed.
+        """
+        palette = current_palette()
+        key = (palette["accent"] if modified else palette["border"], modified)
+        cached = self._dot_icons.get(key)
+        if cached is not None:
+            return cached
+        # Drawn oversized and handed to QIcon, which scales it down for
+        # whatever DPI the screen turns out to be. Asking the widget for its
+        # device pixel ratio here instead re-enters window creation and
+        # overflows the stack — this runs while the window is still being
+        # built, before it has a screen to ask about.
+        side = TAB_DOT_SIZE * 4
+        pixmap = QPixmap(side, side)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(key[0]))
+        painter.drawEllipse(0, 0, side, side)
+        painter.end()
+        icon = QIcon(pixmap)
+        self._dot_icons[key] = icon
+        return icon
+
     def _document_state_changed(self, tab: DocumentTab):
         index = self.tabs.indexOf(tab)
         if index < 0:
             return
-        title = f"● {tab.display_name}" if tab.modified else tab.display_name
-        self.tabs.setTabText(index, title)
+        self.tabs.setTabText(index, tab.display_name)
+        self.tabs.setTabIcon(index, self._dot_icon(tab.modified))
         self.tabs.setTabToolTip(index, tab.path or "Unsaved document")
         if tab is self.current_document():
             self._update_status()
-            self.setWindowTitle(f"{title} — {APP_TITLE}")
+            marker = "● " if tab.modified else ""
+            self.setWindowTitle(f"{marker}{tab.display_name} — {APP_TITLE}")
 
     def _current_tab_changed(self, _index):
         tab = self.current_document()
@@ -1695,10 +1735,12 @@ class MainWindow(QMainWindow):
                 self._cfg.get("accent_palette", "graphite"),
             )
         )
+        self._dot_icons.clear()
         for index in range(self.tabs.count()):
             tab = self.tabs.widget(index)
             tab.editor.refresh_code_blocks()
             tab.highlighter.rehighlight()
+            self.tabs.setTabIcon(index, self._dot_icon(tab.modified))
 
     def show_settings(self):
         dialog = SettingsDialog(self._cfg, self)

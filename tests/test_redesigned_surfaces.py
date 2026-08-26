@@ -117,13 +117,10 @@ def test_the_task_pane_groups_by_urgency(qapp, notes):
         (notes / "Clients" / "بامسما.md").read_text(encoding="utf-8"),
         str(notes / "Clients" / "بامسما.md"),
     ))
-    headers = [
-        sidebar.task_list.topLevelItem(i).text(0).split()[0]
-        for i in range(sidebar.task_list.topLevelItemCount())
-    ]
+    headers = sidebar.task_list.header_texts()
     assert "عقب‌افتاده" in headers
     assert "امروز" in headers
-    assert "بدون" in headers[-1] or "بدون تاریخ" in headers
+    assert "بدون تاریخ" in headers
     sidebar.deleteLater()
 
 
@@ -133,10 +130,7 @@ def test_a_finished_task_is_not_listed(qapp, notes):
     sidebar._tasks_scanned(
         parse_document((notes / "today.md").read_text(encoding="utf-8"), path)
     )
-    shown = []
-    for i in range(sidebar.task_list.topLevelItemCount()):
-        parent = sidebar.task_list.topLevelItem(i)
-        shown += [parent.child(c).text(0) for c in range(parent.childCount())]
+    shown = sidebar.task_list.task_texts()
     assert not any("انجام شده" in text for text in shown)
     sidebar.deleteLater()
 
@@ -161,14 +155,8 @@ def test_my_tasks_opens_on_the_plain_list(qapp, notes):
 
 def test_the_split_view_separates_today_from_what_is_ahead(qapp, notes):
     dialog = TodayDialog(str(notes))
-    today = [
-        dialog._today_tree.topLevelItem(i).text(0)
-        for i in range(dialog._today_tree.topLevelItemCount())
-    ]
-    ahead = [
-        dialog._ahead_tree.topLevelItem(i).text(0)
-        for i in range(dialog._ahead_tree.topLevelItemCount())
-    ]
+    today = dialog._today_tree.task_texts()
+    ahead = dialog._ahead_tree.task_texts()
     # The overdue one belongs with today's column, not with the future.
     assert any("فاکتور" in text for text in today)
     assert any("هاست" in text for text in ahead)

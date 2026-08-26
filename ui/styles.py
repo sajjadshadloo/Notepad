@@ -280,6 +280,7 @@ QTabBar {{
 }}
 QTabBar::tab {{
     background: transparent;
+    /* Room for the 6px status dot the window sets as the tab icon. */
     color: {t['muted']};
     border: 1px solid transparent;
     border-radius: 8px;
@@ -525,6 +526,14 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
 #quickOpenList::item:selected, #noteList::item:selected {{
     background: {t['hover']};
     color: {t['accent']};
+}}
+
+/* Task rows are painted by ui/task_rows.py, so the sheet only owns the
+   surface they sit on — no ::item rules, or they would fight the delegate. */
+#taskList {{
+    background: transparent;
+    border: none;
+    outline: none;
 }}
 
 /* My Tasks (Ctrl+T) — the same segmented control as the sidebar, so the
