@@ -16,6 +16,7 @@ from core.list_editing import (
     outdent_list_line,
     parse_list_item,
 )
+from core.jalali import to_persian_digits
 from core.rtl_detector import detect_direction
 from ui.styles import current_palette
 
@@ -186,7 +187,9 @@ class SmartEditor(QTextEdit):
                     self._line_area.width() - 10,
                     self.fontMetrics().height(),
                     Qt.AlignmentFlag.AlignRight,
-                    str(number + 1),
+                    # Persian digits, like the design and like the numbered
+                    # list markers already in the text.
+                    to_persian_digits(str(number + 1)),
                 )
             block = block.next()
             number += 1

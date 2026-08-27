@@ -73,6 +73,8 @@ class ReminderService(QObject):
     scanned_once = pyqtSignal()
     # (done, total) for today — drives the progress meter in the tab strip.
     progress_changed = pyqtSignal(int, int)
+    # How many tasks are still open — shown on the top bar's tasks button.
+    open_count_changed = pyqtSignal(int)
 
     def __init__(self, root: str, icon: QIcon, parent=None, schedule: bool = True):
         super().__init__(parent)
@@ -119,6 +121,7 @@ class ReminderService(QObject):
         self._by_id = {win_scheduler.task_id(t.key()): t for t in tasks}
         done, total = today_progress(tasks, datetime.now())
         self.progress_changed.emit(done, total)
+        self.open_count_changed.emit(sum(1 for t in tasks if not t.done))
         self.scanned_once.emit()
         if self._schedule:
             self._sync_schedule(tasks)

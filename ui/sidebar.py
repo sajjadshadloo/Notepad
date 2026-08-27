@@ -33,6 +33,7 @@ from ui.calendar_panel import CalendarPanel
 from core.search_service import search_notes
 from core.jalali import to_persian_digits
 from ui.styles import current_palette
+from ui.note_rows import NoteList
 from ui.task_rows import TaskList, when_label
 
 NOTE_EXTENSIONS = (".txt", ".md", ".markdown")
@@ -107,6 +108,8 @@ class Sidebar(QWidget):
         sidebar_font.setFamilies(font_families or font_chain({}))
         self.setFont(sidebar_font)
 
+        self._active_path: str | None = None
+        self._current_files: list[str] = []
         self._tasks: list[Task] = []
         self._tasks_stale = True
         self._task_worker: _TaskScanWorker | None = None
@@ -164,17 +167,15 @@ class Sidebar(QWidget):
 
         self.search_input = QLineEdit()
         self.search_input.setObjectName("sidebarSearch")
-        self.search_input.setPlaceholderText("Search notes…")
+        self.search_input.setPlaceholderText("Filter notes")
         self.search_input.textChanged.connect(self._on_search_text_changed)
         self.search_input.textChanged.connect(self._style_search_input)
         column.addWidget(self.search_input)
 
-        # A tree, not a list: subfolders are how notes get organised, and a
-        # flat rglob hid that structure entirely.
-        self.note_list = QTreeWidget()
-        self.note_list.setObjectName("noteList")
-        self.note_list.setHeaderHidden(True)
-        self.note_list.setIndentation(12)
+        # Flat, with a heading per folder and how long ago each note was
+        # opened — the folder structure is still visible, but a subfolder
+        # costs a label rather than an indent column and an arrow.
+        self.note_list = NoteList()
         # Single click opens a note; itemActivated keeps Enter working too.
         self.note_list.itemClicked.connect(self._activate_item)
         self.note_list.itemActivated.connect(self._activate_item)
@@ -304,19 +305,19 @@ class Sidebar(QWidget):
 
     def _show_search_results(self, results):
         self.note_list.clear()
+        if not results:
+            self.note_list.add_header("No matches")
+            return
+        self.note_list.add_header("Results")
         for result in results:
             name = Path(result.path).name
-            # line_number 0 marks a title match — show it like a normal
-            # note entry; content matches keep their snippet context.
-            if result.line_number == 0:
-                label = name
-            else:
-                label = f"{name} · {result.snippet}"
-            item = QTreeWidgetItem([label])
-            item.setData(0, Qt.ItemDataRole.UserRole, result.path)
-            item.setToolTip(0, result.path)
-            self._style_note_item(item, name)
-            self.note_list.addTopLevelItem(item)
+            # line_number 0 marks a title match — show it like a normal note
+            # entry; a content match keeps its snippet as the trailing meta.
+            self.note_list.add_note(
+                result.path,
+                name,
+                "" if result.line_number == 0 else result.snippet,
+            )
 
     def refresh(self):
         """Rescan the notes folder — but only while the sidebar is visible.
@@ -341,20 +342,22 @@ class Sidebar(QWidget):
             if p.is_file() and p.suffix.lower() in NOTE_EXTENSIONS
         ]
         self._index = note_index.prune(self._index, set(files))
+        self._current_files = files
         self._rebuild_note_list(files)
 
     def _rebuild_note_list(self, files: list[str]):
         """Group notes under the folder they live in.
 
-        Files sitting loose in the notes root stay at the top level; every
-        subfolder becomes a collapsible parent, so the tree mirrors what
-        Explorer shows instead of flattening it all into one list.
+        Files sitting loose in the notes root land under "Root"; every
+        subfolder becomes its own heading, so the tree Explorer shows is
+        still legible without an indent column.
         """
         self.note_list.clear()
         # Resolve the root the same way the file paths were resolved, or
         # relative_to() fails on every one of them — the stored root can be
         # "C:/Users/.../Notepad" while the scan yields "C:\Users\...".
         root_path = Path(self.root).resolve()
+        active = self._active_path
 
         def last_opened(path: str) -> str:
             return self._index.get(path, {}).get("last_opened", "") or "0"
@@ -373,30 +376,31 @@ class Sidebar(QWidget):
             else:
                 by_folder.setdefault(folder, []).append(path)
 
-        # Most recently opened first, within the root and within each folder.
-        for path in sorted(loose, key=last_opened, reverse=True):
-            self.note_list.addTopLevelItem(self._note_item(path))
+        def add_group(label: str, paths: list[str]):
+            if not paths:
+                return
+            self.note_list.add_header(label)
+            for path in sorted(paths, key=last_opened, reverse=True):
+                self.note_list.add_note(
+                    path,
+                    Path(path).name,
+                    self._format_date(path, self._index.get(path, {})),
+                    active=bool(active) and os.path.normcase(path)
+                    == os.path.normcase(active),
+                )
 
+        # Most recently opened first, within each folder.
         for folder in sorted(by_folder):
-            parent = QTreeWidgetItem([f"📁 {folder}"])
-            parent.setFirstColumnSpanned(True)
-            self._style_note_item(parent, folder)
-            for path in sorted(by_folder[folder], key=last_opened, reverse=True):
-                parent.addChild(self._note_item(path))
-            self.note_list.addTopLevelItem(parent)
-            parent.setExpanded(True)
+            add_group(folder, by_folder[folder])
+        add_group("Root", loose)
 
-    def _note_item(self, path: str) -> QTreeWidgetItem:
-        entry = self._index.get(path, {})
-        name = Path(path).name
-        item = QTreeWidgetItem([name])
-        item.setData(0, Qt.ItemDataRole.UserRole, path)
-        # One line per note keeps the tree scannable; the timestamp is
-        # detail you want on demand, not on every row.
-        date = self._format_date(path, entry)
-        item.setToolTip(0, path + ((chr(10) + date) if date else ''))
-        self._style_note_item(item, name)
-        return item
+    def set_active_note(self, path: str | None):
+        """Highlight the note that is open, the way the design does."""
+        if path == self._active_path:
+            return
+        self._active_path = path
+        if self.note_list.count():
+            self._rebuild_note_list(self._current_files)
 
     @staticmethod
     def _format_date(path: str, entry: dict) -> str:
@@ -510,10 +514,7 @@ class Sidebar(QWidget):
         if payload:
             self.task_activated.emit(payload[0], payload[1])
 
-    def _activate_item(self, item: QTreeWidgetItem):
-        path = item.data(0, Qt.ItemDataRole.UserRole)
+    def _activate_item(self, item):
+        path = self.note_list.path_of(item)
         if path:
             self.note_activated.emit(path)
-        else:
-            # A folder row: toggle it instead of pretending to open something.
-            item.setExpanded(not item.isExpanded())

@@ -208,6 +208,45 @@ QMenu::separator {{
     margin: 5px 10px;
 }}
 
+/* The top bar — the design's own row, and what stands in for a menu bar. */
+#topBar {{
+    background: {t['surface']};
+    border-bottom: 1px solid {t['border']};
+}}
+#topBar QToolButton {{
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    color: {t['muted']};
+    padding: 0 6px;
+    font-size: 12px;
+}}
+#topBar QToolButton:hover {{ background: {t['hover']}; color: {t['text']}; }}
+#topBar QToolButton:checked {{
+    background: {t['surface_alt']};
+    color: {t['accent']};
+}}
+#tasksButton {{ padding: 0 9px; }}
+#breadcrumb {{ color: {t['muted']}; font-size: 12px; }}
+/* The search field sits on the window colour so it reads as a well in the
+   chrome, and it is a button that looks like a field on purpose. */
+#topSearch {{
+    background: {t['window']};
+    border: 1px solid {t['border']};
+    border-radius: 8px;
+    padding: 0;
+    text-align: left;
+}}
+#topSearch:hover {{ border-color: {t['accent_hover']}; }}
+#topSearchLabel {{ color: {t['muted']}; font-size: 12px; }}
+#topSearchHint {{
+    color: {t['muted']};
+    border: 1px solid {t['border']};
+    border-radius: 5px;
+    padding: 1px 6px;
+    font-size: 10px;
+}}
+
 /* The format bar sits on the window colour, not the chrome colour, so it
    reads as the top edge of the page rather than a second grey band. */
 #formatBar {{
@@ -271,10 +310,11 @@ QToolBar::separator {{
     font-size: 11px;
 }}
 
-#documentTabs::pane {{
-    border: none;
-    background: {t['window']};
+#documentTabs {{
+    background: {t['surface']};
+    border-bottom: 1px solid {t['border']};
 }}
+#documentPages {{ background: {t['window']}; }}
 /* Tabs are separated pills on the chrome band, not a filing-cabinet row
    of joined rectangles: no dividing lines, a rounded body, and the active
    one lifted onto the window colour. */

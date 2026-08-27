@@ -67,13 +67,16 @@ from core.recovery_manager import (
     save_recovery,
 )
 from ui.document_tab import DocumentTab, editor_font
+from ui.document_tabs import DocumentTabs
+from ui.icons import icon
+from ui.top_bar import TopBar
 from ui.quick_open import QuickOpenDialog
 from ui.reminder_service import ReminderService
 from ui.today_view import TodayDialog
 from ui.settings_dialog import SettingsDialog
 from ui.shortcuts_dialog import ShortcutsDialog
 from ui.sidebar import Sidebar
-from ui.styles import build_stylesheet, current_palette
+from ui.styles import build_stylesheet, current_palette, resolve_theme
 
 log = logging.getLogger(__name__)
 
@@ -81,7 +84,7 @@ log = logging.getLogger(__name__)
 TAB_DOT_SIZE = 6
 
 APP_TITLE = "Notepad Plus"
-APP_VERSION = "3.7.3"
+APP_VERSION = "3.8.0"
 FILE_FILTER = "Text Files (*.txt);;Markdown (*.md *.markdown);;All Files (*.*)"
 ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 
@@ -106,33 +109,10 @@ class DocumentTabBar(QTabBar):
         self.new_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.new_button.setFixedSize(34, 30)
         self.new_button.clicked.connect(self.new_requested)
-        self.tabMoved.connect(lambda *_args: self._position_new_button())
 
-    def _position_new_button(self):
-        if self.count():
-            x = self.tabRect(self.count() - 1).right() + 5
-        else:
-            x = 4
-        x = min(x, max(4, self.width() - self.new_button.width() - 4))
-        y = max(0, (self.height() - self.new_button.height()) // 2)
-        self.new_button.move(x, y)
-        self.new_button.raise_()
-
-    def tabInserted(self, index: int):
-        super().tabInserted(index)
-        QTimer.singleShot(0, self._position_new_button)
-
-    def tabRemoved(self, index: int):
-        super().tabRemoved(index)
-        QTimer.singleShot(0, self._position_new_button)
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._position_new_button()
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        self._position_new_button()
+    # The + is placed by the tab strip's layout (see DocumentTabs), not
+    # positioned by hand over the bar: computing its x from tabRect() put it
+    # on top of the last tab's close button whenever the bar had not settled.
 
 
 def _app_icon() -> QIcon:
@@ -288,6 +268,7 @@ class MainWindow(QMainWindow):
         self._closing_application = False
         # Tab status dots, keyed by colour; dropped when the palette changes.
         self._dot_icons: dict = {}
+        self._focus_mode = False
         self._zoom_steps = 0
         self._recently_closed: list[str] = []
         # Fingerprint of the last snapshot written per tab, plus which tabs
@@ -342,6 +323,11 @@ class MainWindow(QMainWindow):
         action.setCheckable(checkable)
         if shortcut:
             action.setShortcut(QKeySequence(shortcut))
+            # Registered on the window itself, not left to the menu bar to
+            # carry: the design has no menu bar, and a shortcut whose only
+            # home is a hidden menu still fires — but one on an action in no
+            # menu at all would not.
+            self.addAction(action)
         action.triggered.connect(slot)
         return action
 
@@ -460,6 +446,9 @@ class MainWindow(QMainWindow):
         self.fence_action = self._action(
             "Code &Fence", self.wrap_in_code_fence, "Ctrl+Shift+C"
         )
+        self.focus_action = self._action(
+            "&Focus Mode", self.toggle_focus_mode, "Ctrl+.", checkable=True
+        )
         self.font_action = self._action("&Font…", self.show_settings)
 
         # View
@@ -559,6 +548,14 @@ class MainWindow(QMainWindow):
         self.theme_actions.get(current_theme, self.theme_actions["system"]).setChecked(True)
 
     def _build_menus(self):
+        """Build the menus, then hide the bar.
+
+        The design has no menu bar — everything reaches you through the top
+        bar and Ctrl+K. The menus are still built because they are what the
+        command palette enumerates, so nothing can quietly become
+        unreachable when a feature is added to a menu and nowhere else.
+        """
+        self.menuBar().setVisible(False)
         file_menu = self.menuBar().addMenu("&File")
         file_menu.addAction(self.new_action)
         file_menu.addAction(self.open_action)
@@ -634,6 +631,7 @@ class MainWindow(QMainWindow):
         view_menu.addSeparator()
         view_menu.addAction(self.line_numbers_action)
         view_menu.addAction(self.sidebar_action)
+        view_menu.addAction(self.focus_action)
         view_menu.addAction(self.sidebar_right_action)
 
         help_menu = self.menuBar().addMenu("&Help")
@@ -684,15 +682,19 @@ class MainWindow(QMainWindow):
         )
         bar.addWidget(spacer)
         find = self._action("Find", self.find_action.trigger)
+        find.setIcon(icon("search", current_palette()["muted"], 13))
         find.setToolTip("Find and replace  (Ctrl+F)")
         bar.addAction(find)
-        self.addToolBar(bar)
+        # Kept as a plain widget, not addToolBar(): the design puts this
+        # below the tab strip, and a QMainWindow toolbar can only go above
+        # the central widget.
+        bar.setFloatable(False)
+        self.format_bar = bar
+        self._find_toolbar_action = find
 
     def _build_ui(self):
-        self.tabs = QTabWidget()
-        self.tabs.setObjectName("documentTabs")
-        self.document_tab_bar = DocumentTabBar(self.tabs)
-        self.tabs.setTabBar(self.document_tab_bar)
+        self.document_tab_bar = DocumentTabBar()
+        self.tabs = DocumentTabs(self.document_tab_bar)
         self.document_tab_bar.new_requested.connect(self.new_document)
         self.tabs.setTabsClosable(True)
         self.tabs.setMovable(True)
@@ -722,9 +724,31 @@ class MainWindow(QMainWindow):
 
         self._splitter = QSplitter(Qt.Orientation.Horizontal)
         self._splitter.addWidget(self.sidebar)
-        self._splitter.addWidget(self.tabs)
+        self._splitter.addWidget(self.tabs.pages)
         self._apply_sidebar_side()
-        self.setCentralWidget(self._splitter)
+
+        # The design's stacking order, top to bottom: the top bar, the tab
+        # strip, the format bar, then the sidebar and editor side by side.
+        # The format bar is a plain widget in this column rather than a
+        # QMainWindow toolbar, because a toolbar can only sit above the
+        # central widget — which would put it above the tabs.
+        self.top_bar = TopBar()
+        self.top_bar.search_requested.connect(self.show_quick_open)
+        self.top_bar.sidebar_toggled.connect(self.sidebar_action.trigger)
+        self.top_bar.tasks_requested.connect(self.show_today)
+        self.top_bar.focus_toggled.connect(self.toggle_focus_mode)
+        self.top_bar.theme_toggled.connect(self.cycle_theme)
+        self.top_bar.settings_requested.connect(self.show_settings)
+
+        shell = QWidget()
+        column = QVBoxLayout(shell)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(0)
+        column.addWidget(self.top_bar)
+        column.addWidget(self.tabs)
+        column.addWidget(self.format_bar)
+        column.addWidget(self._splitter, 1)
+        self.setCentralWidget(shell)
 
         # Save state leads on the left, where the eye lands first — it is the
         # one thing here you might need to act on. Counts and the three
@@ -796,6 +820,11 @@ class MainWindow(QMainWindow):
         self._today_meter_holder = holder
         return holder
 
+    def update_open_task_count(self, count: int):
+        self.top_bar.set_open_task_count(
+            to_persian_digits(str(count)) if count else ""
+        )
+
     def update_today_meter(self, done: int, total: int):
         self._today_meter_holder.setVisible(total > 0)
         if total <= 0:
@@ -806,6 +835,36 @@ class MainWindow(QMainWindow):
         self._today_meter_holder.setToolTip(
             to_persian_digits(f"{done} از {total} کار امروز انجام شده")
         )
+
+    def toggle_focus_mode(self, enabled: bool | None = None):
+        """Ctrl+. — everything but the page gets out of the way.
+
+        The design's focus state hides the chrome and narrows the text
+        column; here that is the top bar, tab strip, format bar and status
+        bar. The sidebar is left as the user set it.
+        """
+        self._focus_mode = (not self._focus_mode) if enabled is None else enabled
+        for widget in (
+            self.top_bar,
+            self.tabs,
+            self.format_bar,
+            self.statusBar(),
+        ):
+            widget.setVisible(not self._focus_mode)
+        # The top bar is hidden in focus mode, so its button cannot be the
+        # only way back out.
+        self.top_bar.set_focus_active(self._focus_mode)
+        self.focus_action.setChecked(self._focus_mode)
+
+    def cycle_theme(self):
+        """The top bar's sun button: straight between dark and light.
+
+        "System" is a setting, not a step in a toggle, so this lands on a
+        concrete theme rather than cycling through three.
+        """
+        current = self._cfg.get("theme", "system")
+        resolved = "light" if resolve_theme(current) == "light" else "dark"
+        self.set_theme("dark" if resolved == "light" else "light")
 
     def wrap_in_code_fence(self):
         """Put ``` lines around the selection, or open an empty fence.
@@ -1042,21 +1101,40 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def _palette_commands(self) -> list[tuple]:
-        """The handful of commands worth reaching without the menus."""
-        return [
-            (label, action.shortcut().toString(), action.trigger)
-            for label, action in (
-                ("New document", self.new_action),
-                ("Save", self.save_action),
-                ("Today's note", self.daily_note_action),
-                ("My tasks", self.today_action),
-                ("Find and replace", self.find_action),
-                ("Toggle sidebar", self.sidebar_action),
-                ("Settings", self.settings_action),
-                ("Keyboard shortcuts", self.shortcuts_action),
-            )
-            if action is not None
-        ]
+        """Every command in the app, read off the (hidden) menus.
+
+        Walking the menus rather than listing commands by hand is what keeps
+        the palette complete: with no menu bar on screen, anything missing
+        here would be reachable only by its shortcut, if it has one.
+        """
+        commands: list[tuple] = []
+        seen: set[int] = set()
+
+        def walk(menu, prefix: str):
+            for action in menu.actions():
+                if action.isSeparator() or not action.isEnabled():
+                    continue
+                submenu = action.menu()
+                label = action.text().replace("&", "").strip()
+                if submenu is not None:
+                    walk(submenu, f"{prefix}{label} › " if label else prefix)
+                    continue
+                if not label or id(action) in seen:
+                    continue
+                seen.add(id(action))
+                commands.append(
+                    (
+                        prefix + label.rstrip("…"),
+                        action.shortcut().toString(),
+                        action.trigger,
+                    )
+                )
+
+        for menu_action in self.menuBar().actions():
+            menu = menu_action.menu()
+            if menu is not None:
+                walk(menu, "")
+        return commands
 
     def open_file(self, path: str) -> bool:
         candidate = str(Path(path).resolve())
@@ -1380,6 +1458,18 @@ class MainWindow(QMainWindow):
         self.tabs.setTabIcon(index, self._dot_icon(tab.modified))
         self.tabs.setTabToolTip(index, tab.path or "Unsaved document")
         if tab is self.current_document():
+            folder = ""
+            if tab.path:
+                root = Path(self._cfg.get("notes_root") or "")
+                try:
+                    folder = Path(tab.path).resolve().parent.relative_to(
+                        root.resolve()
+                    ).as_posix()
+                except (ValueError, OSError):
+                    folder = Path(tab.path).parent.name
+                folder = "" if folder == "." else folder
+            self.top_bar.set_breadcrumb(folder, tab.display_name)
+            self.sidebar.set_active_note(tab.path or None)
             self._update_status()
             marker = "● " if tab.modified else ""
             self.setWindowTitle(f"{marker}{tab.display_name} — {APP_TITLE}")
@@ -1736,6 +1826,10 @@ class MainWindow(QMainWindow):
             )
         )
         self._dot_icons.clear()
+        self.top_bar.refresh_palette()
+        self._find_toolbar_action.setIcon(
+            icon("search", current_palette()["muted"], 13)
+        )
         for index in range(self.tabs.count()):
             tab = self.tabs.widget(index)
             tab.editor.refresh_code_blocks()
@@ -1951,6 +2045,7 @@ class MainWindow(QMainWindow):
         )
         self._reminders.task_activated.connect(self._open_task)
         self._reminders.progress_changed.connect(self.update_today_meter)
+        self._reminders.open_count_changed.connect(self.update_open_task_count)
         self._reminders.start()
 
     def show_scheduled_reminder(self, identifier: str):
