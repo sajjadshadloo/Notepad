@@ -49,7 +49,8 @@ import core.settings_manager as settings_manager
 from core.external_change_monitor import ExternalChangeMonitor
 from core.export_service import export_to_html, export_to_pdf
 from core.jalali import to_persian_digits
-from core.tasks import add_stamp, shift_stamp, toggle_repeat
+from core.tasks import parse_task
+from core.tasks import set_stamp, shift_stamp, toggle_repeat
 from core.formatting import (
     toggle_bold,
     toggle_bullet,
@@ -75,6 +76,7 @@ from ui.quick_open import QuickOpenDialog
 from ui.reminder_service import ReminderService
 from ui.today_view import TodayDialog
 from ui.settings_dialog import SettingsDialog
+from ui.stamp_picker import StampPicker
 from ui.shortcuts_dialog import ShortcutsDialog
 from ui.sidebar import Sidebar
 from ui.styles import build_stylesheet, current_palette, resolve_theme
@@ -85,7 +87,7 @@ log = logging.getLogger(__name__)
 TAB_DOT_SIZE = 6
 
 APP_TITLE = "Notepad Plus"
-APP_VERSION = "3.10.0"
+APP_VERSION = "3.11.0"
 FILE_FILTER = "Text Files (*.txt);;Markdown (*.md *.markdown);;All Files (*.*)"
 ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 
@@ -533,9 +535,7 @@ class MainWindow(QMainWindow):
         # A task becomes a deadline by carrying a stamp, and a habit by
         # carrying the repeat mark after it. Both stay plain text.
         self.stamp_action = self._action(
-            "Add &Date Stamp",
-            lambda: self._transform_selected_lines(add_stamp),
-            "Ctrl+Shift+A",
+            "Schedule…", self.show_stamp_picker, "Ctrl+Shift+A"
         )
         self.repeat_action = self._action(
             "Repeat &Weekly",
@@ -765,7 +765,8 @@ class MainWindow(QMainWindow):
 
         # The three that turn a checkbox into something with a deadline.
         stamp = self._action("@", self.stamp_action.trigger)
-        stamp.setToolTip("Add today's date stamp to this task")
+        stamp.setToolTip("Schedule this task — pick a day and an hour")
+        self._stamp_toolbar_action = stamp
         repeat = self._action("↻", self.repeat_action.trigger)
         repeat.setToolTip("Repeat this task weekly")
         fence = self._action("</>", self.fence_action.trigger)
@@ -969,6 +970,36 @@ class MainWindow(QMainWindow):
         current = self._cfg.get("theme", "system")
         resolved = "light" if resolve_theme(current) == "light" else "dark"
         self.set_theme("dark" if resolved == "light" else "light")
+
+    def show_stamp_picker(self):
+        """The @ button: pick a day and an hour for the task under the cursor.
+
+        Before this the button stamped today and said nothing about how to
+        add a time, which you could only do by knowing to type it.
+        """
+        tab = self.current_document()
+        if not tab:
+            return
+        # Start on the date the line already carries, if it has one.
+        existing = None
+        line = tab.editor.textCursor().block().text()
+        task = parse_task(line)
+        if task is not None and task.due is not None:
+            existing = task.due.date()
+
+        picker = StampPicker(self._cfg["notes_root"], existing, self)
+        picker.picked.connect(
+            lambda day, at: self._transform_selected_lines(
+                lambda text: set_stamp(text, day, at)
+            )
+        )
+        # Under the @ button, so it reads as that button's own menu.
+        anchor = self.format_bar.widgetForAction(self._stamp_toolbar_action)
+        if anchor is not None:
+            picker.move(
+                anchor.mapToGlobal(anchor.rect().bottomLeft())
+            )
+        picker.exec()
 
     def wrap_in_code_fence(self):
         """Put ``` lines around the selection, or open an empty fence.

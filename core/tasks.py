@@ -219,6 +219,33 @@ def shift_stamp(line: str, days: int) -> str | None:
     return line[: match.start()] + stamp + line[match.end():]
 
 
+def set_stamp(line: str, when: date, at: time | None = None) -> str:
+    """Give a task line this deadline, replacing whatever it had.
+
+    Unlike `add_stamp`, this is what the picker calls: the user chose the
+    date on purpose, so an existing one is meant to be overwritten. A weekly
+    repeat mark survives — changing when a task is due does not stop it
+    repeating.
+    """
+    from core.jalali import from_gregorian, to_persian_digits
+
+    if _TODO_RE.match(line) is None:
+        return line
+    year, month, day = from_gregorian(when)
+    stamp = "@%04d/%02d/%02d" % (year, month, day)
+    if at is not None:
+        stamp += " %02d:%02d" % (at.hour, at.minute)
+    stamp = to_persian_digits(stamp)
+
+    span = stamp_span(line)
+    if span is not None:
+        if REPEAT_MARK in line[span[0]:span[1]]:
+            stamp += " " + REPEAT_MARK
+        return line[: span[0]] + stamp + line[span[1]:]
+    stripped = line.rstrip()
+    return stripped + " " + stamp + line[len(stripped):]
+
+
 def add_stamp(line: str, when: date | None = None) -> str:
     """Give a checkbox line a date stamp, in Jalali with Persian digits.
 

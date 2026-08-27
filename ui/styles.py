@@ -594,6 +594,26 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
     color: {t['accent']};
 }}
 
+/* The @ button's scheduling popup. */
+#stampPicker {{
+    background: {t['surface']};
+    border: 1px solid {t['border']};
+    border-radius: 12px;
+}}
+QTimeEdit {{
+    background: {t['window']};
+    color: {t['text']};
+    border: 1px solid {t['border']};
+    border-radius: 8px;
+    padding: 5px 8px;
+}}
+QTimeEdit:focus {{ border-color: {t['accent']}; }}
+QTimeEdit::up-button, QTimeEdit::down-button {{
+    background: transparent;
+    border: none;
+    width: 14px;
+}}
+
 /* Settings — a grid of labelled rows, with real controls. */
 #settingsKey {{ color: {t['muted']}; font-size: 12px; }}
 #settingsValue {{ color: {t['text']}; font-size: 12px; }}

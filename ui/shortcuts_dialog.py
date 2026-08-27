@@ -47,7 +47,7 @@ SECTIONS = [
             ("Ctrl+Shift+8", "Bullet list"),
             ("Ctrl+Shift+9", "To-do list"),
             ("Ctrl+D", "Toggle to-do done"),
-            ("Ctrl+Shift+A", "Add today's date stamp to a task"),
+            ("Ctrl+Shift+A", "Schedule a task — pick a day and an hour"),
             ("Ctrl+Shift+R", "Repeat a task weekly"),
             ("Ctrl+Shift+C", "Wrap the selection in a code fence"),
             ("Ctrl+Right Shift", "Right-to-left paragraph"),
