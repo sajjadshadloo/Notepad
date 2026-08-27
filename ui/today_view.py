@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QStackedWidget,
     QToolButton,
     QVBoxLayout,
@@ -103,8 +104,13 @@ class TodayDialog(QDialog):
             button.setText(label)
             button.setCheckable(True)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
+            # Equal thirds, like the sidebar's switch — a stretch factor is
+            # ignored by QToolButton's default fixed size policy.
+            button.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+            )
             button.clicked.connect(lambda _checked, k=key: self.set_mode(k))
-            switch_row.addWidget(button)
+            switch_row.addWidget(button, 1)
             self._mode_buttons[key] = button
         self._mode_buttons["list"].setChecked(True)
         row.addWidget(switch)

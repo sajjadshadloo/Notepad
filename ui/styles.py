@@ -217,11 +217,15 @@ QMenu::separator {{
     spacing: 3px;
     padding: 4px 12px;
 }}
+/* Enough padding that the hover fill reads as a button rather than a sticker
+   pressed onto the glyph. The design's button is 24px tall around an 11.5px
+   label, which is most of the height as breathing room. */
 #formatBar QToolButton {{
     font-weight: 600;
     font-size: 11px;
-    padding: 3px 7px;
-    min-width: 20px;
+    padding: 6px 10px;
+    min-width: 26px;
+    border-radius: 6px;
 }}
 QToolButton {{
     background: transparent;
@@ -463,12 +467,15 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
     border-radius: 9px;
     padding: 3px;
 }}
+/* The three segments share the width equally (see Sidebar._build_switch),
+   so the selected fill is a whole third — not a pill shrink-wrapped around
+   whichever label happens to be longest. */
 #sidebarSwitch QToolButton {{
     background: transparent;
     color: {t['muted']};
     border: none;
     border-radius: 7px;
-    padding: 5px 4px;
+    padding: 7px 6px;
     font-size: 11px;
 }}
 #sidebarSwitch QToolButton:hover {{ color: {t['text']}; }}
@@ -548,7 +555,7 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
     color: {t['muted']};
     border: none;
     border-radius: 7px;
-    padding: 5px 12px;
+    padding: 7px 16px;
     font-size: 12px;
 }}
 #taskSwitch QToolButton:hover {{ color: {t['text']}; }}

@@ -81,7 +81,7 @@ log = logging.getLogger(__name__)
 TAB_DOT_SIZE = 6
 
 APP_TITLE = "Notepad Plus"
-APP_VERSION = "3.7.2"
+APP_VERSION = "3.7.3"
 FILE_FILTER = "Text Files (*.txt);;Markdown (*.md *.markdown);;All Files (*.*)"
 ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 

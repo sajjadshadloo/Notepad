@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QSizePolicy,
     QStackedWidget,
     QToolButton,
     QTreeWidget,
@@ -130,6 +131,10 @@ class Sidebar(QWidget):
     def _build_switch(self) -> QWidget:
         switch = QWidget()
         switch.setObjectName("sidebarSwitch")
+        # The labels are Persian, so the segments read right to left — notes
+        # first, on the right. Set explicitly rather than inherited, or the
+        # order flips with whatever layout direction the app picked up.
+        switch.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         row = QHBoxLayout(switch)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(2)
@@ -139,6 +144,12 @@ class Sidebar(QWidget):
             button.setText(label)
             button.setCheckable(True)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
+            # A stretch factor alone does nothing here: QToolButton defaults to
+            # a fixed, content-sized policy, so the three segments came out
+            # different widths and the selected one hugged its label.
+            button.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+            )
             button.clicked.connect(lambda _checked, k=key: self.show_pane(k))
             row.addWidget(button, 1)
             self._pane_buttons[key] = button
