@@ -33,6 +33,10 @@ class DocumentTabs(QWidget):
         # Tabs keep their natural width; QTabBar otherwise stretches them to
         # fill the strip, so a lone document became one very wide tab.
         self._bar.setExpanding(False)
+        # Without this the bar's minimumSizeHint reserves room for the two
+        # scroll arrows it never shows, leaving ~37px of dead strip between
+        # the last tab and the + button.
+        self._bar.setUsesScrollButtons(False)
         self._row = QHBoxLayout(self)
         self._row.setContentsMargins(0, 0, 0, 0)
         self._row.setSpacing(0)

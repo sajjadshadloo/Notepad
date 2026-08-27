@@ -4,9 +4,9 @@ The design's row is a name on one side and how long ago you touched it on
 the other, grouped under an uppercase folder label. A QTreeWidget gives an
 indent column and an expand arrow instead, and has nowhere to put the date.
 
-Each row picks its own direction from its own name, exactly as the design
-does — a Persian note reads right to left, `snippets.txt` reads left to
-right, in the same list.
+Names and dates each keep to their own column. The design aligns a row to
+its own direction, which works when a list is all one language; in a folder
+holding both, it made every second row start somewhere else.
 """
 from PyQt6.QtCore import QRect, QSize, Qt
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter
@@ -88,21 +88,18 @@ class NoteRowDelegate(QStyledItemDelegate):
         inner = rect.adjusted(PAD_X, 0, -PAD_X, 0)
         title_width = max(20, inner.width() - meta_width - (GAP if meta else 0))
 
-        # The name takes the reading edge, the date the far one.
-        if rtl:
-            title_rect = QRect(
-                inner.right() - title_width, inner.top(), title_width, inner.height()
-            )
-            meta_rect = QRect(inner.left(), inner.top(), meta_width, inner.height())
-            title_align = Qt.AlignmentFlag.AlignRight
-        else:
-            title_rect = QRect(
-                inner.left(), inner.top(), title_width, inner.height()
-            )
-            meta_rect = QRect(
-                inner.right() - meta_width, inner.top(), meta_width, inner.height()
-            )
-            title_align = Qt.AlignmentFlag.AlignLeft
+        # The date always closes the row on the same side, so the dates line
+        # up in one column. Following each row's own direction instead made
+        # them zigzag left and right down a mixed list.
+        title_rect = QRect(inner.left(), inner.top(), title_width, inner.height())
+        meta_rect = QRect(
+            inner.right() - meta_width, inner.top(), meta_width, inner.height()
+        )
+        # Names start at the same edge too, so both columns are straight.
+        # Bidi still lays a Persian name out right to left inside its own
+        # box; only where the box starts is fixed. Aligning each row to its
+        # own direction left the Persian names floating mid-row.
+        title_align = Qt.AlignmentFlag.AlignLeft
 
         painter.setFont(option.font)
         painter.setPen(
@@ -120,14 +117,7 @@ class NoteRowDelegate(QStyledItemDelegate):
             painter.setPen(QColor(palette["muted"]))
             painter.drawText(
                 meta_rect,
-                int(
-                    (
-                        Qt.AlignmentFlag.AlignLeft
-                        if rtl
-                        else Qt.AlignmentFlag.AlignRight
-                    )
-                    | Qt.AlignmentFlag.AlignVCenter
-                ),
+                int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
                 meta,
             )
         painter.restore()

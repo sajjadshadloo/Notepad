@@ -161,9 +161,16 @@ class TopBar(QWidget):
             Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
         )
         inner.addWidget(self.search_label, 1)
-        inner.addWidget(self.search_hint)
+        # Aligned, not stretched: the badge is a 18px pill, and letting the
+        # layout give it the field's full 30px height drew its border as a
+        # tall rectangle around a short label.
+        self.search_hint.setFixedHeight(18)
+        inner.addWidget(self.search_hint, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        row.addWidget(self.search, 2)
+        # The field takes nearly all the spare width until it hits its cap,
+        # then the two equal spacers absorb what is left and keep it centred.
+        # At stretch 2 against two 1s it only ever reached half the slot.
+        row.addWidget(self.search, 20)
         row.addStretch(1)
         return holder
 
