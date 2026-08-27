@@ -106,6 +106,7 @@ class TodayDialog(QDialog):
 
         switch = QWidget()
         switch.setObjectName("taskSwitch")
+        switch.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         switch_row = QHBoxLayout(switch)
         switch_row.setContentsMargins(0, 0, 0, 0)
         switch_row.setSpacing(3)
@@ -140,6 +141,7 @@ class TodayDialog(QDialog):
         ):
             column = QWidget()
             column.setObjectName("splitColumn")
+            column.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
             inner = QVBoxLayout(column)
             inner.setContentsMargins(14, 14, 14, 14)
             inner.setSpacing(10)
@@ -160,6 +162,7 @@ class TodayDialog(QDialog):
     def _build_detail(self) -> QWidget:
         panel = QWidget()
         panel.setObjectName("taskDetail")
+        panel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         panel.setFixedWidth(DETAIL_WIDTH)
         column = QVBoxLayout(panel)
         column.setContentsMargins(18, 22, 18, 22)

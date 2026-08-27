@@ -73,6 +73,11 @@ class TopBar(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("topBar")
+        # A plain QWidget ignores a stylesheet background unless this is
+        # set — only widgets Qt styles natively paint one. Without it the
+        # bar showed the window colour and the QTabBar inside it painted
+        # its own, which read as a stray lighter box around the tab.
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setFixedHeight(BAR_HEIGHT)
 
         row = QHBoxLayout(self)

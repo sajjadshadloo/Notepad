@@ -96,7 +96,7 @@ python -m pytest -q
 
 ```powershell
 python -m PyInstaller --clean --noconfirm notepad.spec   # → dist\NotepadPlus\NotepadPlus.exe
-ISCC.exe installer.iss                                   # → dist\NotepadPlus-Setup-3.9.0.exe
+ISCC.exe installer.iss                                   # → dist\NotepadPlus-Setup-3.9.1.exe
 dist\NotepadPlus\NotepadPlus.exe --smoke-test            # packaged startup check; exits with code 0
 ```
 

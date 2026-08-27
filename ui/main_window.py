@@ -85,7 +85,7 @@ log = logging.getLogger(__name__)
 TAB_DOT_SIZE = 6
 
 APP_TITLE = "Notepad Plus"
-APP_VERSION = "3.9.0"
+APP_VERSION = "3.9.1"
 FILE_FILTER = "Text Files (*.txt);;Markdown (*.md *.markdown);;All Files (*.*)"
 ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 
@@ -157,6 +157,7 @@ class FindReplaceDialog(QDialog):
         find_row.setSpacing(8)
         find_box = QWidget()
         find_box.setObjectName("findField")
+        find_box.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         find_box.setFixedHeight(30)
         find_inner = QHBoxLayout(find_box)
         find_inner.setContentsMargins(10, 0, 10, 0)
@@ -194,6 +195,7 @@ class FindReplaceDialog(QDialog):
         replace_row.setSpacing(8)
         replace_box = QWidget()
         replace_box.setObjectName("findField")
+        replace_box.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         replace_box.setFixedHeight(30)
         replace_inner = QHBoxLayout(replace_box)
         replace_inner.setContentsMargins(10, 0, 10, 0)

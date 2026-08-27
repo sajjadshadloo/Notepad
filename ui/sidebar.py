@@ -93,6 +93,9 @@ class Sidebar(QWidget):
     ):
         super().__init__(parent)
         self.setObjectName("sidebar")
+        # Same reason as the top bar: a plain QWidget paints no stylesheet
+        # background of its own without this.
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.root = root
         # The main window shares its index dict so both always see the same
         # timestamps and never overwrite each other's saves.
@@ -134,6 +137,7 @@ class Sidebar(QWidget):
     def _build_switch(self) -> QWidget:
         switch = QWidget()
         switch.setObjectName("sidebarSwitch")
+        switch.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         # The labels are Persian, so the segments read right to left — notes
         # first, on the right. Set explicitly rather than inherited, or the
         # order flips with whatever layout direction the app picked up.

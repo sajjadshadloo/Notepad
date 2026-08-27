@@ -211,6 +211,7 @@ class SettingsDialog(QDialog):
         """One of N, shown as a segmented control."""
         holder = QWidget()
         holder.setObjectName("segmented")
+        holder.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         row = QHBoxLayout(holder)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(3)

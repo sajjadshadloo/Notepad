@@ -162,6 +162,18 @@ def current_is_light() -> bool:
     return _current_light
 
 
+def translucent(hex_colour: str, alpha: float) -> str:
+    """A token colour at partial opacity, as a Qt rgba() string.
+
+    Selection is the one place a solid accent does not work: it hides the
+    text it is meant to be highlighting, and flattens the heading and bold
+    colours the editor paints underneath. A wash keeps both readable.
+    """
+    value = hex_colour.lstrip("#")
+    red, green, blue = (int(value[i:i + 2], 16) for i in (0, 2, 4))
+    return f"rgba({red}, {green}, {blue}, {alpha})"
+
+
 def build_stylesheet(theme: str = "dark", palette: str = DEFAULT_PALETTE) -> str:
     global _current, _current_light
     _current_light = resolve_theme(theme) == "light"
@@ -359,8 +371,11 @@ QTextEdit {{
     color: {t['text']};
     border: none;
     padding: 22px 26px;
-    selection-background-color: {t['accent']};
-    selection-color: {t['on_accent']};
+    /* A wash of the accent, and the text keeps its own colour. A solid fill
+       hid what you had just selected and flattened the Markdown colouring
+       underneath it. */
+    selection-background-color: {translucent(t['accent'], 0.30)};
+    selection-color: {t['text']};
 }}
 #lineNumberArea {{
     background: {t['window']};
@@ -404,6 +419,8 @@ QStatusBar::item {{ border: none; }}
 }}
 
 QLineEdit {{
+    selection-background-color: {translucent(t['accent'], 0.45)};
+    selection-color: {t['text']};
     background: {t['surface_alt']};
     color: {t['text']};
     border: 1px solid {t['border']};

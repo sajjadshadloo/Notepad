@@ -188,6 +188,7 @@ class QuickOpenDialog(QDialog):
 
         header = QWidget()
         header.setObjectName("paletteHeader")
+        header.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         header_row = QHBoxLayout(header)
         header_row.setContentsMargins(16, 14, 16, 14)
         header_row.setSpacing(10)
@@ -232,6 +233,7 @@ class QuickOpenDialog(QDialog):
 
         footer = QWidget()
         footer.setObjectName("paletteFooter")
+        footer.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         footer_row = QHBoxLayout(footer)
         footer_row.setContentsMargins(16, 8, 16, 8)
         footer_row.setSpacing(16)
