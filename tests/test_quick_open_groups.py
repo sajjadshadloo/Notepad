@@ -8,7 +8,7 @@ import pytest
 from PyQt6.QtCore import Qt
 
 from core.tasks import parse_document
-from ui.quick_open import QuickOpenDialog
+from ui.quick_open import ROLE_FIELDS, QuickOpenDialog
 
 
 @pytest.fixture
@@ -27,7 +27,12 @@ def tasks(notes):
 
 
 def _rows(dialog):
-    return [dialog.results.item(i).text() for i in range(dialog.results.count())]
+    """Rows are painted, so their label lives in the fields, not in text()."""
+    out = []
+    for i in range(dialog.results.count()):
+        fields = dialog.results.item(i).data(ROLE_FIELDS) or {}
+        out.append(fields.get("label", ""))
+    return out
 
 
 def _payloads(dialog):

@@ -155,8 +155,8 @@ def test_my_tasks_opens_on_the_plain_list(qapp, notes):
 
 def test_the_split_view_separates_today_from_what_is_ahead(qapp, notes):
     dialog = TodayDialog(str(notes))
-    today = dialog._today_tree.task_texts()
-    ahead = dialog._ahead_tree.task_texts()
+    today = dialog._today_tree.card_texts()
+    ahead = dialog._ahead_tree.card_texts()
     # The overdue one belongs with today's column, not with the future.
     assert any("فاکتور" in text for text in today)
     assert any("هاست" in text for text in ahead)

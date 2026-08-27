@@ -75,6 +75,9 @@ class ReminderService(QObject):
     progress_changed = pyqtSignal(int, int)
     # How many tasks are still open — shown on the top bar's tasks button.
     open_count_changed = pyqtSignal(int)
+    # (text, meta, path, line) — the in-app card the design shows. The tray
+    # balloon still fires; this is the one you can act on.
+    announced = pyqtSignal(str, str, str, int)
 
     def __init__(self, root: str, icon: QIcon, parent=None, schedule: bool = True):
         super().__init__(parent)
@@ -99,6 +102,14 @@ class ReminderService(QObject):
 
     def set_root(self, root: str):
         self._root = root
+
+    def forget(self, path: str, line_number: int):
+        """Drop a task from the announced set so it can be raised again."""
+        for task in self._by_id.values():
+            if task.path == path and task.line_number == line_number:
+                self._notified.discard(task.key())
+                reminder_store.save(self._notified)
+                return
 
     def open_tasks(self) -> list[Task]:
         """Unfinished tasks from the last scan, most urgent first.
@@ -158,6 +169,18 @@ class ReminderService(QObject):
             title = f"{len(tasks)} کار سررسید شد"
             body = "\n".join(t.text for t in tasks[:4])
         self._tray.showMessage(title, body, QSystemTrayIcon.MessageIcon.Information, 10_000)
+        first = tasks[0]
+        when = ""
+        if first.due and first.has_time:
+            from core.jalali import to_persian_digits
+
+            when = to_persian_digits(first.due.strftime("%H:%M")) + " · "
+        self.announced.emit(
+            first.text,
+            when + (Path(first.path).name if first.path else ""),
+            first.path,
+            first.line_number,
+        )
 
     def _sync_schedule(self, tasks: list):
         """Mirror upcoming reminders into Windows Task Scheduler.

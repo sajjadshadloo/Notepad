@@ -69,6 +69,7 @@ from core.recovery_manager import (
 from ui.document_tab import DocumentTab, editor_font
 from ui.document_tabs import DocumentTabs
 from ui.icons import icon
+from ui.toast import ReminderToast
 from ui.top_bar import TopBar
 from ui.quick_open import QuickOpenDialog
 from ui.reminder_service import ReminderService
@@ -84,7 +85,7 @@ log = logging.getLogger(__name__)
 TAB_DOT_SIZE = 6
 
 APP_TITLE = "Notepad Plus"
-APP_VERSION = "3.8.1"
+APP_VERSION = "3.9.0"
 FILE_FILTER = "Text Files (*.txt);;Markdown (*.md *.markdown);;All Files (*.*)"
 ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 
@@ -138,43 +139,139 @@ class FindReplaceDialog(QDialog):
         self._window = window
         self.setWindowTitle("Find and Replace")
         self.setModal(False)
-        self.setMinimumWidth(420)
+        self.setObjectName("findPanel")
+        self.setFixedWidth(430)
+        # A frameless card floated over the editor, like the design's panel,
+        # rather than a second window with its own title bar in the taskbar.
+        self.setWindowFlags(
+            Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint
+        )
 
         layout = QVBoxLayout(self)
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(8)
-        grid.addWidget(QLabel("Find:"), 0, 0)
-        self.find_input = QLineEdit()
-        grid.addWidget(self.find_input, 0, 1)
-        grid.addWidget(QLabel("Replace with:"), 1, 0)
-        self.replace_input = QLineEdit()
-        grid.addWidget(self.replace_input, 1, 1)
-        layout.addLayout(grid)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(9)
 
+        # Find row: the field carries its own label and match count, with
+        # previous / next / close beside it.
+        find_row = QHBoxLayout()
+        find_row.setSpacing(8)
+        find_box = QWidget()
+        find_box.setObjectName("findField")
+        find_box.setFixedHeight(30)
+        find_inner = QHBoxLayout(find_box)
+        find_inner.setContentsMargins(10, 0, 10, 0)
+        find_inner.setSpacing(8)
+        find_caption = QLabel("Find")
+        find_caption.setObjectName("findCaption")
+        self.find_input = QLineEdit()
+        self.find_input.setObjectName("findInput")
+        self.find_input.setFrame(False)
+        self.count_label = QLabel()
+        self.count_label.setObjectName("findCount")
+        find_inner.addWidget(find_caption)
+        find_inner.addWidget(self.find_input, 1)
+        find_inner.addWidget(self.count_label)
+        find_row.addWidget(find_box, 1)
+
+        for glyph, tooltip, slot in (
+            ("‹", "Previous  (Shift+F3)", self.find_previous),
+            ("›", "Next  (F3)", self.find_next),
+        ):
+            button = QPushButton(glyph)
+            button.setObjectName("findStep")
+            button.setFixedSize(28, 30)
+            button.clicked.connect(slot)
+            find_row.addWidget(button)
+        close_button = QPushButton("×")
+        close_button.setObjectName("findClose")
+        close_button.setFixedSize(28, 30)
+        close_button.clicked.connect(self.close)
+        find_row.addWidget(close_button)
+        layout.addLayout(find_row)
+
+        # Replace row.
+        replace_row = QHBoxLayout()
+        replace_row.setSpacing(8)
+        replace_box = QWidget()
+        replace_box.setObjectName("findField")
+        replace_box.setFixedHeight(30)
+        replace_inner = QHBoxLayout(replace_box)
+        replace_inner.setContentsMargins(10, 0, 10, 0)
+        replace_inner.setSpacing(8)
+        replace_caption = QLabel("Replace")
+        replace_caption.setObjectName("findCaption")
+        self.replace_input = QLineEdit()
+        self.replace_input.setObjectName("findInput")
+        self.replace_input.setFrame(False)
+        replace_inner.addWidget(replace_caption)
+        replace_inner.addWidget(self.replace_input, 1)
+        replace_row.addWidget(replace_box, 1)
+
+        replace_button = QPushButton("Replace")
+        replace_button.setObjectName("findAction")
+        replace_button.setFixedHeight(30)
+        replace_button.clicked.connect(self.replace_one)
+        replace_all_button = QPushButton("All")
+        replace_all_button.setObjectName("findAction")
+        replace_all_button.setFixedHeight(30)
+        replace_all_button.clicked.connect(self.replace_all)
+        replace_row.addWidget(replace_button)
+        replace_row.addWidget(replace_all_button)
+        layout.addLayout(replace_row)
+
+        # The three options are pills, not checkboxes.
         options = QHBoxLayout()
-        self.case_checkbox = QCheckBox("Match case")
-        self.word_checkbox = QCheckBox("Whole word")
-        self.wrap_checkbox = QCheckBox("Wrap around")
+        options.setSpacing(6)
+        self.case_checkbox = self._flag_pill("Match case")
+        self.word_checkbox = self._flag_pill("Whole word")
+        self.wrap_checkbox = self._flag_pill("Wrap around")
         self.wrap_checkbox.setChecked(True)
         for box in (self.case_checkbox, self.word_checkbox, self.wrap_checkbox):
             options.addWidget(box)
-        options.addStretch()
+        options.addStretch(1)
         layout.addLayout(options)
 
-        buttons = QHBoxLayout()
-        find_button = QPushButton("Find Next")
-        find_prev_button = QPushButton("Find Previous")
-        replace_button = QPushButton("Replace")
-        replace_all_button = QPushButton("Replace All")
-        find_button.clicked.connect(self.find_next)
-        find_prev_button.clicked.connect(self.find_previous)
-        replace_button.clicked.connect(self.replace_one)
-        replace_all_button.clicked.connect(self.replace_all)
-        for button in (find_button, find_prev_button, replace_button, replace_all_button):
-            buttons.addWidget(button)
-        layout.addLayout(buttons)
+        self.find_input.textChanged.connect(self._update_count)
         self.find_input.returnPressed.connect(self.find_next)
         self.replace_input.returnPressed.connect(self.replace_one)
+
+    def _flag_pill(self, label: str) -> QToolButton:
+        pill = QToolButton()
+        pill.setText(label)
+        pill.setCheckable(True)
+        pill.setObjectName("findFlag")
+        pill.setCursor(Qt.CursorShape.PointingHandCursor)
+        pill.toggled.connect(self._update_count)
+        return pill
+
+    def _update_count(self, *_args):
+        """How many matches the current needle has, shown in the field."""
+        editor = self._editor()
+        needle = self.find_input.text()
+        if editor is None or not needle:
+            self.count_label.setText("")
+            return
+        document = editor.document()
+        flags = self._flags()
+        found = 0
+        cursor = document.find(needle, 0, flags)
+        while not cursor.isNull() and found < 999:
+            found += 1
+            cursor = document.find(needle, cursor, flags)
+        self.count_label.setText(str(found) if found < 999 else "999+")
+
+    def place_over_editor(self):
+        """Top right of the editor, like the design's floating panel."""
+        window = self._window
+        top_left = window.mapToGlobal(window.rect().topLeft())
+        x = top_left.x() + window.width() - self.width() - 26
+        y = top_left.y() + 120
+        self.move(max(top_left.x() + 10, x), y)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.place_over_editor()
+        self._update_count()
 
     def _editor(self):
         tab = self._window.current_document()
@@ -749,6 +846,11 @@ class MainWindow(QMainWindow):
         column.addWidget(self.format_bar)
         column.addWidget(self._splitter, 1)
         self.setCentralWidget(shell)
+
+        # Lives over the editor, positioned from the window's own size.
+        self.toast = ReminderToast(shell)
+        self.toast.opened.connect(self._open_task)
+        self.toast.snoozed.connect(self._snooze_minutes)
 
         # Save state leads on the left, where the eye lands first — it is the
         # one thing here you might need to act on. Counts and the three
@@ -1860,6 +1962,8 @@ class MainWindow(QMainWindow):
                 # Leaving them registered would keep firing after the user
                 # asked for that to stop.
                 self._reminders.clear_schedule()
+        self.line_numbers_action.setChecked(values["show_line_numbers"])
+        self.toggle_line_numbers(values["show_line_numbers"])
         self.word_wrap_action.setChecked(values["word_wrap"])
         self.toggle_word_wrap(values["word_wrap"])
         self._apply_editor_fonts()
@@ -2046,6 +2150,7 @@ class MainWindow(QMainWindow):
         self._reminders.task_activated.connect(self._open_task)
         self._reminders.progress_changed.connect(self.update_today_meter)
         self._reminders.open_count_changed.connect(self.update_open_task_count)
+        self._reminders.announced.connect(self.toast.show_task)
         self._reminders.start()
 
     def show_scheduled_reminder(self, identifier: str):
@@ -2119,6 +2224,19 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("تعویق این کار ممکن نشد", 4000)
             return
         self.statusBar().showMessage("کار به فردا موکول شد", 3000)
+
+    def _snooze_minutes(self, path: str, line_number: int, minutes: int):
+        """"Later" on a reminder: forget it was announced, and look again.
+
+        Nothing is written — the task keeps its time. Dropping it from the
+        announced set is what lets the next scan raise it again.
+        """
+        if self._reminders is not None:
+            self._reminders.forget(path, line_number)
+            QTimer.singleShot(minutes * 60_000, self._reminders.check_now)
+        self.statusBar().showMessage(
+            to_persian_digits(f"یادآوری {minutes} دقیقه بعد تکرار می‌شود"), 4000
+        )
 
     def _open_task(self, path: str, line_number: int):
         """Jump to the exact line a reminder came from."""

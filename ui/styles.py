@@ -412,6 +412,23 @@ QLineEdit {{
 }}
 QLineEdit:focus {{ border-color: {t['accent']}; }}
 QLabel, QCheckBox {{ color: {t['text']}; }}
+/* Qt's stock indicator is not themed and came out pink against every
+   palette. Drawn from the tokens like everything else. */
+QCheckBox {{ spacing: 8px; }}
+QCheckBox::indicator {{
+    width: 15px;
+    height: 15px;
+    border: 1px solid {t['border']};
+    border-radius: 4px;
+    background: {t['window']};
+}}
+QCheckBox::indicator:hover {{ border-color: {t['accent']}; }}
+QCheckBox::indicator:checked {{
+    background: {t['accent']};
+    border-color: {t['accent']};
+    image: none;
+}}
+QCheckBox::indicator:disabled {{ border-color: {t['border']}; }}
 
 QComboBox, QSpinBox {{
     background: {t['surface_alt']};
@@ -560,20 +577,151 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
     color: {t['accent']};
 }}
 
+/* Settings — a grid of labelled rows, with real controls. */
+#settingsKey {{ color: {t['muted']}; font-size: 12px; }}
+#settingsValue {{ color: {t['text']}; font-size: 12px; }}
+#segmented {{
+    background: {t['surface_alt']};
+    border-radius: 8px;
+}}
+#segmented QToolButton {{
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    color: {t['muted']};
+    font-size: 12px;
+    padding: 5px 14px;
+}}
+#segmented QToolButton:hover {{ color: {t['text']}; }}
+#segmented QToolButton:checked {{
+    background: {t['accent']};
+    color: {t['on_accent']};
+    font-weight: 600;
+}}
+#swatch {{
+    background: transparent;
+    border: 2px solid transparent;
+    border-radius: 8px;
+    padding: 0;
+}}
+#swatch:checked {{ border-color: {t['text']}; }}
+/* A pill that fills with the accent when on — Qt has no switch widget, so
+   the knob is the button's own rounded body reading as one. */
+#switch {{
+    background: {t['surface_alt']};
+    border: 1px solid {t['border']};
+    border-radius: 12px;
+}}
+#switch:checked {{
+    background: {t['accent']};
+    border-color: {t['accent']};
+}}
+QSlider::groove:horizontal {{
+    background: {t['surface_alt']};
+    height: 4px;
+    border-radius: 2px;
+}}
+QSlider::sub-page:horizontal {{
+    background: {t['accent']};
+    height: 4px;
+    border-radius: 2px;
+}}
+QSlider::handle:horizontal {{
+    background: {t['accent']};
+    width: 14px;
+    height: 14px;
+    margin: -6px 0;
+    border-radius: 7px;
+}}
+
+/* Find and Replace — a card floated over the editor. */
+#findPanel {{
+    background: {t['surface']};
+    border: 1px solid {t['border']};
+    border-radius: 12px;
+}}
+#findField {{
+    background: {t['window']};
+    border: 1px solid {t['border']};
+    border-radius: 8px;
+}}
+#findCaption {{ color: {t['muted']}; font-size: 11px; }}
+#findCount {{ color: {t['muted']}; font-size: 11px; }}
+#findInput {{
+    background: transparent;
+    border: none;
+    color: {t['text']};
+    font-size: 12px;
+    padding: 0;
+}}
+#findStep, #findClose, #findAction {{
+    background: {t['surface_alt']};
+    border: 1px solid {t['border']};
+    border-radius: 8px;
+    color: {t['muted']};
+    font-size: 12px;
+    padding: 0 10px;
+}}
+#findStep:hover, #findClose:hover, #findAction:hover {{
+    border-color: {t['accent']};
+    color: {t['accent']};
+}}
+#findClose {{ background: transparent; border-color: transparent; }}
+#findAction {{ color: {t['text']}; }}
+#findFlag {{
+    background: transparent;
+    border: 1px solid {t['border']};
+    border-radius: 10px;
+    color: {t['muted']};
+    font-size: 11px;
+    padding: 3px 10px;
+}}
+#findFlag:hover {{ color: {t['text']}; }}
+#findFlag:checked {{
+    background: {t['surface_alt']};
+    border-color: {t['accent']};
+    color: {t['accent']};
+}}
+
+/* The reminder card, over the editor. */
+#toast {{
+    background: {t['surface']};
+    border: 1px solid {t['border']};
+    border-radius: 12px;
+}}
+#toastTitle {{ color: {t['text']}; font-size: 12px; font-weight: 600; }}
+#toastBody {{ color: {t['text']}; font-size: 13px; }}
+#toastMeta {{ color: {t['muted']}; font-size: 11px; }}
+#toastClose {{
+    background: transparent;
+    border: none;
+    color: {t['muted']};
+    border-radius: 6px;
+    padding: 0 5px;
+}}
+#toastClose:hover {{ background: {t['hover']}; color: {t['text']}; }}
+
+#paletteHeader {{ background: {t['surface']}; }}
+#paletteFooter {{ background: {t['surface']}; }}
+#paletteScope {{
+    color: {t['muted']};
+    font-size: 12px;
+    font-weight: 600;
+}}
+#paletteInput {{
+    background: transparent;
+    border: none;
+    color: {t['text']};
+    font-size: 14px;
+    padding: 0;
+}}
+#paletteFootnote {{ color: {t['muted']}; font-size: 11px; }}
+
 #quickOpenList, #noteList {{
     background: transparent;
     border: none;
 }}
-#quickOpenList::item, #noteList::item {{
-    padding: 8px 10px;
-    border-radius: 6px;
-    color: {t['text']};
-}}
-#quickOpenList::item:hover, #noteList::item:hover {{ background: {t['hover']}; }}
-#quickOpenList::item:selected, #noteList::item:selected {{
-    background: {t['hover']};
-    color: {t['accent']};
-}}
+#quickOpenList {{ padding: 8px; }}
 
 /* Task rows are painted by ui/task_rows.py, so the sheet only owns the
    surface they sit on — no ::item rules, or they would fight the delegate. */
@@ -606,24 +754,57 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
 }}
 #taskHeading {{
     color: {t['text']};
-    font-size: 17px;
+    font-size: 21px;
     font-weight: 700;
 }}
 #taskSummary {{
     color: {t['muted']};
-    font-size: 11px;
+    font-size: 12px;
     border: none;
-    padding: 2px 4px;
+    padding: 0;
 }}
 #timelineHour {{
     color: {t['muted']};
     font-size: 11px;
 }}
 #timelineHour[now="true"] {{ color: {t['accent']}; font-weight: 600; }}
-#splitColumn {{
+#taskCards {{
+    background: transparent;
+    border: none;
+    outline: none;
+}}
+/* The detail panel closes the window on the left, on the chrome colour. */
+#taskDetail {{
     background: {t['surface']};
+    border-left: 1px solid {t['border']};
+}}
+#detailTitle {{ color: {t['text']}; font-size: 15px; }}
+#detailPill {{
     border: 1px solid {t['border']};
     border-radius: 10px;
+    color: {t['muted']};
+    font-size: 11px;
+    padding: 3px 10px;
+}}
+#detailRule {{ border: none; background: {t['border']}; max-height: 1px; }}
+#detailKey {{ color: {t['muted']}; font-size: 12px; }}
+#detailValue {{ color: {t['text']}; font-size: 12px; }}
+#primaryButton {{
+    background: {t['accent']};
+    color: {t['on_accent']};
+    border: none;
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-weight: 600;
+}}
+#primaryButton:hover {{ background: {t['accent_hover']}; }}
+#primaryButton:disabled {{
+    background: {t['surface_alt']};
+    color: {t['muted']};
+}}
+#splitColumnCount {{
+    color: {t['muted']};
+    font-size: 11px;
 }}
 #splitColumnTitle {{
     color: {t['muted']};
