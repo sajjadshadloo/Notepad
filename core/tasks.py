@@ -160,6 +160,28 @@ _STAMP_REWRITE_RE = re.compile(
 )
 
 
+# The whole stamp, including its time and repeat mark — what the editor
+# draws its capsule around.
+_STAMP_SPAN_RE = re.compile(
+    r"@" + _ANY_DIGIT + r"{3,4}[/-]" + _ANY_DIGIT + r"{1,2}[/-]"
+    + _ANY_DIGIT + r"{1,2}"
+    r"(?:\s+" + _ANY_DIGIT + r"{1,2}:" + _ANY_DIGIT + r"{2})?"
+    r"(?:\s*" + REPEAT_MARK + r")?"
+)
+
+
+def stamp_span(line: str) -> tuple[int, int] | None:
+    """Where the date stamp sits in a task line, as (start, end).
+
+    Only checkbox lines count: an ``@`` in ordinary prose is not a deadline
+    and must not be drawn as one.
+    """
+    if _TODO_RE.match(line) is None:
+        return None
+    found = _STAMP_SPAN_RE.search(line)
+    return (found.start(), found.end()) if found else None
+
+
 def shift_stamp(line: str, days: int) -> str | None:
     """Move a task line's date forward, or None when there is nothing to move.
 

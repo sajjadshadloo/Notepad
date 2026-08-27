@@ -19,12 +19,12 @@ def window(tmp_path, monkeypatch, qapp):
     from ui.main_window import MainWindow
     from ui.styles import build_stylesheet
 
-    # These tests read pixels, so the app has to be styled the way it is at
-    # runtime — unstyled, every widget paints Qt's default #efefef.
-    previous = qapp.styleSheet()
-    qapp.setStyleSheet(build_stylesheet("dark", "graphite"))
-
     window = MainWindow()
+    # Styled on the window, not the application. These tests read pixels, so
+    # a stylesheet is required — but an app-wide one re-polishes every widget
+    # alive in the process, including any a previous test file leaked, and
+    # walking one of those crashes the interpreter outright.
+    window.setStyleSheet(build_stylesheet("dark", "graphite"))
     window._cfg["notes_root"] = str(tmp_path / "notes")
     window.sidebar.setVisible(True)
     window.resize(1100, 560)
@@ -34,7 +34,6 @@ def window(tmp_path, monkeypatch, qapp):
     for index in range(window.tabs.count()):
         window.tabs.widget(index).mark_clean()
     window.close()
-    qapp.setStyleSheet(previous)
 
 
 def _colour_at(window, widget, dx: int, dy: int) -> str:

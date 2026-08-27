@@ -18,6 +18,7 @@ from core.list_editing import (
 )
 from core.jalali import to_persian_digits
 from core.rtl_detector import detect_direction
+from core.tasks import parse_task, stamp_span
 from ui.styles import current_palette
 
 
@@ -45,6 +46,10 @@ CHECKBOX_MAX_SIZE = 17
 # The clickable area is grown around the painted box so the checkbox is a
 # comfortable hit target without making the drawn square look heavy.
 CHECKBOX_HIT_PADDING = 3
+# How far the date capsule is grown around the stamp's own glyphs. Kept
+# small: the only room it has is the space before the "@".
+STAMP_PAD_X = 4
+STAMP_PAD_Y = 1
 
 
 def fenced_code_lines(text: str) -> set[int]:
@@ -92,6 +97,7 @@ class SmartEditor(QTextEdit):
         self.markdown_highlighter = None
         self._hovered_checkbox_block: int | None = None
         self._marker_cache: list | None = None
+        self._stamp_cache: list | None = None
         # Paragraphs touched since the last layout pass. Only these need their
         # direction re-applied; every other block already carries the right
         # format, and Qt keeps that format attached to the block itself rather
@@ -769,6 +775,96 @@ class SmartEditor(QTextEdit):
 
     def _invalidate_marker_cache(self):
         self._marker_cache = None
+        self._stamp_cache = None
+
+    def _span_rect(self, block, start: int, end: int) -> QRect | None:
+        """Screen rectangle covering one character range of a block.
+
+        Every character boundary is measured, not just the two ends. A stamp
+        is one logical run but bidi can split it into several visual ones —
+        "@1405/06/02 10:00" on a right-to-left line puts the time on the far
+        side of the date — and the two outer carets then bound only part of
+        it. The union of all of them is the real box.
+        """
+        cursor = QTextCursor(block)
+        base = block.position()
+
+        # On a left-to-right line the stamp cannot be reordered, so the two
+        # outer carets already bound it and the scan below is wasted work.
+        if self._direction_for_text(block.text()) != "rtl":
+            cursor.setPosition(base + start)
+            first = self.cursorRect(cursor)
+            cursor.setPosition(base + end)
+            last = self.cursorRect(cursor)
+            if first.top() != last.top() or first.left() == last.left():
+                return None
+            return QRect(
+                min(first.left(), last.left()),
+                first.top(),
+                abs(last.left() - first.left()),
+                first.height(),
+            )
+
+        left = top = height = None
+        right = None
+        for position in range(start, end + 1):
+            cursor.setPosition(base + position)
+            rect = self.cursorRect(cursor)
+            if top is None:
+                left = right = rect.left()
+                top, height = rect.top(), rect.height()
+                continue
+            # Wrapped onto another visual line: stop at the first one, so a
+            # capsule is never stretched down the page.
+            if rect.top() != top:
+                return None
+            left = min(left, rect.left())
+            right = max(right, rect.left())
+        if top is None or right == left:
+            return None
+        return QRect(left, top, right - left, height)
+
+    def _visible_stamps(self):
+        """Yield (rect, overdue) for the date capsules inside the viewport.
+
+        Cached exactly like the list markers, and for the same reason: the
+        geometry only moves when the text, the scroll position or the font
+        does, so a repaint on its own must not recompute it.
+        """
+        cached = self._stamp_cache
+        if cached is not None:
+            yield from cached
+            return
+
+        stamps = []
+        block = self.cursorForPosition(QPoint(0, 0)).block()
+        viewport_bottom = self.viewport().height()
+        while block.isValid():
+            top = self.cursorRect(QTextCursor(block)).top()
+            if top > viewport_bottom:
+                break
+            if block.isVisible() and not self.line_is_code(block.blockNumber()):
+                text = block.text()
+                span = stamp_span(text)
+                if span is not None:
+                    rect = self._span_rect(block, *span)
+                    if rect is not None and rect.width() > 0:
+                        task = parse_task(text)
+                        stamps.append(
+                            (
+                                rect.adjusted(
+                                    -STAMP_PAD_X,
+                                    -STAMP_PAD_Y,
+                                    STAMP_PAD_X,
+                                    STAMP_PAD_Y,
+                                ),
+                                bool(task and task.overdue),
+                                bool(task and task.done),
+                            )
+                        )
+            block = block.next()
+        self._stamp_cache = stamps
+        yield from stamps
 
     def _checkbox_hit_rect(self, marker_rect: QRect) -> QRect:
         """Clickable area of a to-do checkbox, slightly larger than the box."""
@@ -818,6 +914,22 @@ class SmartEditor(QTextEdit):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         theme = current_palette()
         accent = QColor(theme["accent"])
+
+        # The date capsule: an outline behind the stamp's own text, so the
+        # deadline reads as a badge without the file gaining any markup.
+        for stamp_rect, overdue, done in self._visible_stamps():
+            if not stamp_rect.intersects(event.rect()):
+                continue
+            if done:
+                colour = QColor(theme["muted"])
+            elif overdue:
+                colour = QColor(theme["danger"])
+            else:
+                colour = QColor(theme["border"])
+            painter.setPen(QPen(colour, 1.0))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            radius = stamp_rect.height() / 2
+            painter.drawRoundedRect(stamp_rect, radius, radius)
 
         for block, item, marker_rect in self._visible_list_markers():
             if not marker_rect.intersects(event.rect()):
