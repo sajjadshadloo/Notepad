@@ -12,7 +12,7 @@ import pytest
 from core.jalali import format_date
 from core.tasks import parse_document
 from ui.sidebar import PANES, Sidebar
-from ui.today_view import MODES, TodayDialog, when_label
+from ui.today_view import TodayDialog, when_label
 
 
 def _stamp(offset_days: int, time: str = "") -> str:
@@ -137,29 +137,21 @@ def test_a_finished_task_is_not_listed(qapp, notes):
 
 # My Tasks
 
-def test_my_tasks_offers_three_readings_of_the_list(qapp, notes):
+def test_my_tasks_is_one_grouped_list(qapp, notes):
+    """4.0 dropped the split and timeline arrangements; this is what is left."""
     dialog = TodayDialog(str(notes))
-    assert [key for key, _ in MODES] == ["list", "split", "timeline"]
-    dialog.set_mode("timeline")
-    assert dialog._stack.currentIndex() == 2
-    assert dialog._mode_buttons["timeline"].isChecked()
-    assert not dialog._mode_buttons["list"].isChecked()
+    assert not hasattr(dialog, "_stack")
+    assert not hasattr(dialog, "_mode_buttons")
+    texts = dialog._list_tree.card_texts()
+    assert any("فاکتور" in text for text in texts)
+    assert any("هاست" in text for text in texts)
     dialog.deleteLater()
 
 
-def test_my_tasks_opens_on_the_plain_list(qapp, notes):
+def test_my_tasks_groups_by_urgency(qapp, notes):
     dialog = TodayDialog(str(notes))
-    assert dialog._stack.currentIndex() == 0
-    dialog.deleteLater()
-
-
-def test_the_split_view_separates_today_from_what_is_ahead(qapp, notes):
-    dialog = TodayDialog(str(notes))
-    today = dialog._today_tree.card_texts()
-    ahead = dialog._ahead_tree.card_texts()
-    # The overdue one belongs with today's column, not with the future.
-    assert any("فاکتور" in text for text in today)
-    assert any("هاست" in text for text in ahead)
+    headers = dialog._list_tree.header_texts()
+    assert "عقب‌افتاده" in headers
     dialog.deleteLater()
 
 

@@ -29,12 +29,6 @@ PATHS = {
         '<rect x="2" y="2.5" width="12" height="11" rx="2"></rect>'
         '<polyline points="5,8 7,10 11,5.6"></polyline>'
     ),
-    "focus": (
-        '<polyline points="2,6 2,2 6,2"></polyline>'
-        '<polyline points="10,2 14,2 14,6"></polyline>'
-        '<polyline points="14,10 14,14 10,14"></polyline>'
-        '<polyline points="6,14 2,14 2,10"></polyline>'
-    ),
     "theme": (
         '<circle cx="8" cy="8" r="3.4"></circle>'
         '<line x1="8" y1="1" x2="8" y2="2.6"></line>'

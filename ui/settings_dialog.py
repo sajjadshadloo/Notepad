@@ -163,23 +163,9 @@ class SettingsDialog(QDialog):
         folder_row.addWidget(browse)
         self._row(files, 1, "Notes folder", folder)
 
-        checks = QWidget()
-        checks_column = QVBoxLayout(checks)
-        checks_column.setContentsMargins(0, 0, 0, 0)
-        checks_column.setSpacing(8)
-        self.schedule_check = QCheckBox(
-            "Remind me even when Notepad Plus is closed"
-        )
-        self.schedule_check.setToolTip(
-            "Registers upcoming reminders with Windows Task Scheduler. "
-            "Turning this off removes the ones already registered."
-        )
-        self.schedule_check.setChecked(bool(settings.get("schedule_reminders", True)))
         self.wrap_check = QCheckBox("Wrap long lines")
         self.wrap_check.setChecked(bool(settings.get("word_wrap", True)))
-        checks_column.addWidget(self.schedule_check)
-        checks_column.addWidget(self.wrap_check)
-        self._row(files, 2, "Reminders", checks)
+        self._row(files, 2, "Lines", self.wrap_check)
 
         layout.addStretch(1)
 
@@ -361,7 +347,6 @@ class SettingsDialog(QDialog):
             "word_wrap": self.wrap_check.isChecked(),
             "default_direction": self._direction,
             "show_line_numbers": self.line_numbers.isChecked(),
-            "schedule_reminders": self.schedule_check.isChecked(),
             "default_save_dir": (
                 self.folder_edit.text().strip() or settings_manager.DEFAULT_SAVE_DIR
             ),

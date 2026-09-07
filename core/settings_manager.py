@@ -49,9 +49,12 @@ DEFAULTS = {
     # document on one side until you say otherwise. Code blocks stay LTR
     # either way, and a per-file override is remembered in the note index.
     "default_direction": "rtl",
-    # Mirror upcoming reminders into Windows Task Scheduler so they still
-    # arrive with the editor closed. Off means in-app reminders only.
-    "schedule_reminders": True,
+    # The app stays in the tray when its window is closed. Explaining
+    # that is useful exactly once, so the balloon is latched here.
+    "tray_notice_shown": False,
+    # One-time tidy-up of the empty day notes 3.x created on every
+    # calendar click. Latched so it runs once, not every launch.
+    "daily_cleanup_done": False,
 }
 
 DIRECTION_MODES = ("rtl", "ltr", "auto")

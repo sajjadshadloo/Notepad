@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from PyQt6.QtCore import QThread, QTimer, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QFont
+from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -19,7 +19,6 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
     QStackedWidget,
     QToolButton,
-    QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
@@ -32,7 +31,6 @@ from core.tasks import Task, group_of, sort_for_today
 from ui.calendar_panel import CalendarPanel
 from core.search_service import search_notes
 from core.jalali import to_persian_digits
-from ui.styles import current_palette
 from ui.note_rows import NoteList
 from ui.task_rows import TaskList, when_label
 
@@ -69,7 +67,7 @@ class _TaskScanWorker(QThread):
         self.root = root
 
     def run(self):
-        from ui.reminder_service import scan_folder
+        from core.task_scan import scan_folder
 
         try:
             self.scanned.emit(scan_folder(self.root))

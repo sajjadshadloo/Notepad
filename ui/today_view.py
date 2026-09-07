@@ -1,11 +1,9 @@
-"""Ctrl+T — every unfinished dated task across the notes folder, in one place.
+"""Ctrl+T — every unfinished task across the notes folder, in one place.
 
-Three ways to look at the same list, because "what is late" and "what is my
-day shaped like" are different questions:
-
-* **لیست** groups by urgency — overdue, today, tomorrow, later, undated.
-* **امروز و آینده** splits today away from everything after it.
-* **تایم‌لاین** lays today's dated work out against the clock.
+One list, grouped by urgency: overdue, today, tomorrow, later, undated. 3.x
+offered two more arrangements of the same tasks — a today/ahead split and an
+hour-by-hour timeline — and neither answered a question the grouped list did
+not already answer, so 4.0 keeps the one that does.
 
 Selecting a task fills the panel on the left; opening one jumps to that exact
 line, so this stays a view over the files rather than a second place where
@@ -22,26 +20,19 @@ from PyQt6.QtWidgets import (
     QLabel,
     QPushButton,
     QSizePolicy,
-    QStackedWidget,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from core.jalali import format_long, to_persian_digits
 from core.tasks import Task, group_of, sort_for_today
-from ui.reminder_service import scan_folder
+from core.task_scan import scan_folder
 from ui.task_cards import TaskCardList
 from ui.task_rows import when_label
 
 # Urgency order, and the order the groups are shown in.
 GROUP_ORDER = ("عقب‌افتاده", "امروز", "فردا", "بعداً", "بدون تاریخ")
 
-MODES = (("list", "لیست"), ("split", "امروز و آینده"), ("timeline", "تایم‌لاین"))
-
-# The spine of a working day. Hours outside it appear only when something is
-# actually scheduled there, so the timeline never scrolls through dead time.
-WORKDAY_HOURS = (8, 9, 10, 11, 12, 14, 16, 18)
 
 DETAIL_WIDTH = 290
 
@@ -72,15 +63,8 @@ class TodayDialog(QDialog):
         column.setSpacing(14)
         column.addLayout(self._build_header())
 
-        self._stack = QStackedWidget()
         self._list_tree = self._make_list()
-        self._today_tree = self._make_list()
-        self._ahead_tree = self._make_list()
-        self._timeline_tree = self._make_list()
-        self._stack.addWidget(self._list_tree)
-        self._stack.addWidget(self._build_split())
-        self._stack.addWidget(self._timeline_tree)
-        column.addWidget(self._stack, 1)
+        column.addWidget(self._list_tree, 1)
 
         body.addWidget(main, 1)
         body.addWidget(self._build_detail())
@@ -104,23 +88,6 @@ class TodayDialog(QDialog):
         row.addLayout(titles)
         row.addStretch(1)
 
-        switch = QWidget()
-        switch.setObjectName("taskSwitch")
-        switch.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        switch_row = QHBoxLayout(switch)
-        switch_row.setContentsMargins(0, 0, 0, 0)
-        switch_row.setSpacing(3)
-        self._mode_buttons: dict[str, QToolButton] = {}
-        for key, label in MODES:
-            button = QToolButton()
-            button.setText(label)
-            button.setCheckable(True)
-            button.setCursor(Qt.CursorShape.PointingHandCursor)
-            button.clicked.connect(lambda _checked, k=key: self.set_mode(k))
-            switch_row.addWidget(button)
-            self._mode_buttons[key] = button
-        self._mode_buttons["list"].setChecked(True)
-        row.addWidget(switch, 0, Qt.AlignmentFlag.AlignBottom)
         return row
 
     def _make_list(self) -> TaskCardList:
@@ -128,36 +95,6 @@ class TodayDialog(QDialog):
         cards.itemActivated.connect(self._choose)
         cards.currentItemChanged.connect(lambda current, _prev: self._select(current))
         return cards
-
-    def _build_split(self) -> QWidget:
-        holder = QWidget()
-        row = QHBoxLayout(holder)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(18)
-        self._split_counts: dict[str, QLabel] = {}
-        for title, cards in (
-            ("امروز", self._today_tree),
-            ("آینده", self._ahead_tree),
-        ):
-            column = QWidget()
-            column.setObjectName("splitColumn")
-            column.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-            inner = QVBoxLayout(column)
-            inner.setContentsMargins(14, 14, 14, 14)
-            inner.setSpacing(10)
-            head = QHBoxLayout()
-            label = QLabel(title)
-            label.setObjectName("splitColumnTitle")
-            count = QLabel()
-            count.setObjectName("splitColumnCount")
-            head.addWidget(label)
-            head.addStretch(1)
-            head.addWidget(count)
-            self._split_counts[title] = count
-            inner.addLayout(head)
-            inner.addWidget(cards, 1)
-            row.addWidget(column, 1)
-        return holder
 
     def _build_detail(self) -> QWidget:
         panel = QWidget()
@@ -230,17 +167,10 @@ class TodayDialog(QDialog):
 
     # Data
 
-    def set_mode(self, mode: str):
-        for key, button in self._mode_buttons.items():
-            button.setChecked(key == mode)
-        self._stack.setCurrentIndex([k for k, _ in MODES].index(mode))
-
     def reload(self):
         now = datetime.now()
         self._tasks = sort_for_today(scan_folder(self._root), now)
         self._fill_list(now)
-        self._fill_split(now)
-        self._fill_timeline(now)
         self._fill_summary(now)
         self._set_detail(None)
 
@@ -271,56 +201,6 @@ class TodayDialog(QDialog):
         if not self._tasks:
             self._list_tree.add_empty("کاری باقی نمانده ✓")
 
-    def _fill_split(self, now: datetime):
-        self._today_tree.clear()
-        self._ahead_tree.clear()
-        counts = {"امروز": 0, "آینده": 0}
-        for task in self._tasks:
-            due = task.next_due(now)
-            today = due is not None and due.date() <= now.date()
-            self._add_card(
-                self._today_tree if today else self._ahead_tree, task, now
-            )
-            counts["امروز" if today else "آینده"] += 1
-        for title, cards, empty in (
-            ("امروز", self._today_tree, "امروز کاری نیست ✓"),
-            ("آینده", self._ahead_tree, "چیزی در پیش نیست"),
-        ):
-            if cards.count() == 0:
-                cards.add_empty(empty)
-            self._split_counts[title].setText(
-                to_persian_digits(str(counts[title]))
-            )
-
-    def _fill_timeline(self, now: datetime):
-        """Today's dated work against the clock, undated work at the end."""
-        from ui.styles import current_palette
-
-        self._timeline_tree.clear()
-        accent = current_palette()["accent"]
-        today: dict[int, list[Task]] = {}
-        loose: list[Task] = []
-        for task in self._tasks:
-            due = task.next_due(now)
-            if due is not None and due.date() == now.date() and task.has_time:
-                today.setdefault(due.hour, []).append(task)
-            elif due is None:
-                loose.append(task)
-        for hour in sorted(set(WORKDAY_HOURS) | set(today)):
-            self._timeline_tree.add_hour(
-                to_persian_digits("%02d:00" % hour), now=hour == now.hour
-            )
-            for task in today.get(hour, []):
-                self._add_card(
-                    self._timeline_tree, task, now, timeline=True, rail=accent
-                )
-        if loose:
-            self._timeline_tree.add_header(
-                "بدون ساعت", to_persian_digits(str(len(loose)))
-            )
-            for task in loose:
-                self._add_card(self._timeline_tree, task, now)
-
     def _fill_summary(self, now: datetime):
         overdue = sum(1 for t in self._tasks if t.overdue)
         today = sum(
@@ -338,27 +218,17 @@ class TodayDialog(QDialog):
     # Selection
 
     def _task_at(self, item) -> Task | None:
-        """The task a row stands for, whichever of the four lists it is in."""
+        """The task a row stands for, or None for a header or empty row."""
         if item is None:
             return None
-        for cards in (
-            self._list_tree,
-            self._today_tree,
-            self._ahead_tree,
-            self._timeline_tree,
-        ):
-            payload = cards.payload_of(item)
-            if payload:
-                path, line = payload
-                return next(
-                    (
-                        t
-                        for t in self._tasks
-                        if t.path == path and t.line_number == line
-                    ),
-                    None,
-                )
-        return None
+        payload = self._list_tree.payload_of(item)
+        if not payload:
+            return None
+        path, line = payload
+        return next(
+            (t for t in self._tasks if t.path == path and t.line_number == line),
+            None,
+        )
 
     def _select(self, item):
         self._set_detail(self._task_at(item))

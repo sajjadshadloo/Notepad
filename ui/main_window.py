@@ -19,10 +19,8 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtWidgets import (
     QApplication,
-    QCheckBox,
     QDialog,
     QFileDialog,
-    QGridLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -36,7 +34,6 @@ from PyQt6.QtWidgets import (
     QSplitter,
     QSystemTrayIcon,
     QTabBar,
-    QTabWidget,
     QToolBar,
     QToolButton,
     QVBoxLayout,
@@ -47,7 +44,6 @@ from core import daily_notes
 import core.note_index as note_index
 import core.settings_manager as settings_manager
 from core.external_change_monitor import ExternalChangeMonitor
-from core.export_service import export_to_html, export_to_pdf
 from core.jalali import to_persian_digits
 from core.tasks import parse_task
 from core.tasks import set_stamp, shift_stamp, toggle_repeat
@@ -70,10 +66,10 @@ from core.recovery_manager import (
 from ui.document_tab import DocumentTab, editor_font
 from ui.document_tabs import DocumentTabs
 from ui.icons import icon
-from ui.toast import ReminderToast
+from ui.tray import Tray
 from ui.top_bar import TopBar
 from ui.quick_open import QuickOpenDialog
-from ui.reminder_service import ReminderService
+from ui.task_watcher import TaskWatcher
 from ui.today_view import TodayDialog
 from ui.settings_dialog import SettingsDialog
 from ui.stamp_picker import StampPicker
@@ -87,7 +83,7 @@ log = logging.getLogger(__name__)
 TAB_DOT_SIZE = 6
 
 APP_TITLE = "Notepad Plus"
-APP_VERSION = "3.11.0"
+APP_VERSION = "4.0.0"
 FILE_FILTER = "Text Files (*.txt);;Markdown (*.md *.markdown);;All Files (*.*)"
 ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 
@@ -367,9 +363,12 @@ class MainWindow(QMainWindow):
         self._file_monitor.changed.connect(self._external_file_changed)
         self._file_monitor.missing.connect(self._external_file_missing)
         self._closing_application = False
+        # Closing the window only hides it; this is what tells closeEvent
+        # the difference between that and actually leaving.
+        self._really_quitting = False
+        self._tray: Tray | None = None
         # Tab status dots, keyed by colour; dropped when the palette changes.
         self._dot_icons: dict = {}
-        self._focus_mode = False
         self._zoom_steps = 0
         self._recently_closed: list[str] = []
         # Fingerprint of the last snapshot written per tab, plus which tabs
@@ -415,7 +414,8 @@ class MainWindow(QMainWindow):
         # other windows — the app then looks like it simply failed to start.
         # showEvent runs them once the window is actually up.
         self._startup_prompts_shown = False
-        self._reminders: ReminderService | None = None
+        self._tasks_watcher: TaskWatcher | None = None
+        self._install_tray()
 
     # Actions and chrome
 
@@ -459,7 +459,7 @@ class MainWindow(QMainWindow):
         self.settings_action = self._action(
             "Se&ttings…", self.show_settings, "Ctrl+,"
         )
-        self.exit_action = self._action("E&xit", self.close, "Alt+F4")
+        self.exit_action = self._action("E&xit", self.quit_application, "Alt+F4")
 
         # Edit
         self.undo_action = self._action(
@@ -545,9 +545,6 @@ class MainWindow(QMainWindow):
         self.fence_action = self._action(
             "Code &Fence", self.wrap_in_code_fence, "Ctrl+Shift+C"
         )
-        self.focus_action = self._action(
-            "&Focus Mode", self.toggle_focus_mode, "Ctrl+.", checkable=True
-        )
         self.font_action = self._action("&Font…", self.show_settings)
 
         # View
@@ -581,11 +578,6 @@ class MainWindow(QMainWindow):
             "&Keyboard Shortcuts", self.show_shortcuts, "Ctrl+/"
         )
         self.about_action = self._action("&About " + APP_TITLE, self.show_about)
-
-        # Export
-        self.export_pdf_action = self._action("PDF…", lambda: self._export_current("pdf"))
-        self.export_html_action = self._action("HTML…", lambda: self._export_current("html"))
-        self.export_md_action = self._action("Markdown (.md)…", lambda: self._export_current("md"))
 
         # Encoding
         self.encoding_group = QActionGroup(self)
@@ -668,11 +660,6 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         # Encoding intentionally has no menu: it is auto-detected and can be
         # changed from the status bar chip, keeping the File menu lean.
-        export_menu = file_menu.addMenu("Ex&port")
-        export_menu.addAction(self.export_pdf_action)
-        export_menu.addAction(self.export_html_action)
-        export_menu.addAction(self.export_md_action)
-        file_menu.addSeparator()
         self.recent_menu = QMenu("Recent &Files", self)
         self.recent_menu.aboutToShow.connect(self._refresh_recent_menu)
         file_menu.addMenu(self.recent_menu)
@@ -730,7 +717,6 @@ class MainWindow(QMainWindow):
         view_menu.addSeparator()
         view_menu.addAction(self.line_numbers_action)
         view_menu.addAction(self.sidebar_action)
-        view_menu.addAction(self.focus_action)
         view_menu.addAction(self.sidebar_right_action)
 
         help_menu = self.menuBar().addMenu("&Help")
@@ -836,7 +822,6 @@ class MainWindow(QMainWindow):
         self.top_bar.search_requested.connect(self.show_quick_open)
         self.top_bar.sidebar_toggled.connect(self.sidebar_action.trigger)
         self.top_bar.tasks_requested.connect(self.show_today)
-        self.top_bar.focus_toggled.connect(self.toggle_focus_mode)
         self.top_bar.theme_toggled.connect(self.cycle_theme)
         self.top_bar.settings_requested.connect(self.show_settings)
 
@@ -849,11 +834,6 @@ class MainWindow(QMainWindow):
         column.addWidget(self.format_bar)
         column.addWidget(self._splitter, 1)
         self.setCentralWidget(shell)
-
-        # Lives over the editor, positioned from the window's own size.
-        self.toast = ReminderToast(shell)
-        self.toast.opened.connect(self._open_task)
-        self.toast.snoozed.connect(self._snooze_minutes)
 
         # Save state leads on the left, where the eye lands first — it is the
         # one thing here you might need to act on. Counts and the three
@@ -900,7 +880,7 @@ class MainWindow(QMainWindow):
     def _build_today_meter(self) -> QWidget:
         """How much of today is done, at the end of the tab strip.
 
-        Fed by the reminder service's existing scan, so it costs nothing
+        Fed by the task watcher’s existing scan, so it costs nothing
         extra — and it stays hidden on a day with nothing scheduled rather
         than sitting there empty.
         """
@@ -940,26 +920,6 @@ class MainWindow(QMainWindow):
         self._today_meter_holder.setToolTip(
             to_persian_digits(f"{done} از {total} کار امروز انجام شده")
         )
-
-    def toggle_focus_mode(self, enabled: bool | None = None):
-        """Ctrl+. — everything but the page gets out of the way.
-
-        The design's focus state hides the chrome and narrows the text
-        column; here that is the top bar, tab strip, format bar and status
-        bar. The sidebar is left as the user set it.
-        """
-        self._focus_mode = (not self._focus_mode) if enabled is None else enabled
-        for widget in (
-            self.top_bar,
-            self.tabs,
-            self.format_bar,
-            self.statusBar(),
-        ):
-            widget.setVisible(not self._focus_mode)
-        # The top bar is hidden in focus mode, so its button cannot be the
-        # only way back out.
-        self.top_bar.set_focus_active(self._focus_mode)
-        self.focus_action.setChecked(self._focus_mode)
 
     def cycle_theme(self):
         """The top bar's sun button: straight between dark and light.
@@ -1192,22 +1152,34 @@ class MainWindow(QMainWindow):
             self.open_file(path)
 
     def open_daily_note(self, day=None):
-        """Ctrl+Shift+D — the note for a day, created on first visit."""
+        """Ctrl+Shift+D — the note for a day.
+
+        Nothing is written to disk here. Until 4.0 this created the file on
+        the spot, so browsing the calendar left a trail of notes containing
+        only their own heading — seven of them, every one empty, in a folder
+        of twenty-three. Now the day opens as an unsaved document that knows
+        its filename, and becomes a file the moment you save something.
+        """
         from datetime import date as _date
 
         when = day if isinstance(day, _date) else _date.today()
         path = daily_notes.path_for(self._cfg["notes_root"], when)
         if not path.exists():
-            try:
-                write_text_file_atomic(path, daily_notes.starter_text(when), "utf-8")
-            except OSError as exc:
-                QMessageBox.critical(
-                    self,
-                    "Daily Note Failed",
-                    "The note for that day could not be created:" + chr(10) + str(exc),
-                )
+            existing = self._tab_for_pending(str(path))
+            if existing is not None:
+                self.tabs.setCurrentWidget(existing)
+                existing.editor.setFocus()
                 return
-            self.sidebar.refresh()
+            self._make_document(
+                text=daily_notes.starter_text(when),
+                pending_path=str(path),
+            )
+            editor = self.current_document().editor
+            cursor = editor.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            editor.setTextCursor(cursor)
+            editor.setFocus()
+            return
         if self.open_file(str(path)):
             # Land at the end, ready to type rather than at the heading.
             editor = self.current_document().editor
@@ -1229,7 +1201,7 @@ class MainWindow(QMainWindow):
             self._cfg["notes_root"],
             self,
             commands=self._palette_commands(),
-            tasks=self._reminders.open_tasks() if self._reminders else [],
+            tasks=self._tasks_watcher.open_tasks() if self._tasks_watcher else [],
         )
         dialog.note_chosen.connect(self.open_file)
         dialog.task_chosen.connect(self._open_task)
@@ -1322,6 +1294,11 @@ class MainWindow(QMainWindow):
         if not tab:
             return False
         if not tab.path:
+            # A day's note already knows where it belongs; asking would be
+            # a dialog with one right answer.
+            if tab.pending_path:
+                Path(tab.pending_path).parent.mkdir(parents=True, exist_ok=True)
+                return self._save_document(tab, tab.pending_path)
             return self.save_current_as()
         return self._save_document(tab, tab.path)
 
@@ -1900,46 +1877,14 @@ class MainWindow(QMainWindow):
         settings_manager.save(self._cfg)
         self._apply_sidebar_side()
 
-    def _export_current(self, fmt: str):
-        tab = self.current_document()
-        if not tab:
-            return
-        filters = {
-            "pdf": ("Export PDF", "PDF (*.pdf)", ".pdf"),
-            "html": ("Export HTML", "HTML (*.html)", ".html"),
-            "md": ("Export Markdown", "Markdown (*.md)", ".md"),
-        }
-        title, file_filter, suffix = filters[fmt]
-        if tab.path:
-            suggested = str(Path(tab.path).with_suffix(suffix))
-        else:
-            save_dir = settings_manager.resolve_save_dir(self._cfg)
-            suggested = str(save_dir / f"{self._safe_filename(tab.display_name)}{suffix}")
-        path, _ = QFileDialog.getSaveFileName(self, title, suggested, file_filter)
-        if not path:
-            return
-        if not Path(path).suffix:
-            path += suffix
-        try:
-            if fmt == "pdf":
-                export_to_pdf(tab.text, path)
-            elif fmt == "md":
-                write_text_file_atomic(path, tab.text, "utf-8")
-            else:
-                export_to_html(tab.text, path)
-        except Exception as exc:
-            QMessageBox.critical(self, "Export Failed", f"The export failed:\n{exc}")
-            return
-        self.statusBar().showMessage(f"Exported {path}", 3000)
-
     def _open_from_sidebar(self, path: str):
         self.open_file(path)
 
     def _sidebar_root_changed(self, folder: str):
         self._cfg["notes_root"] = folder
         settings_manager.save(self._cfg)
-        if self._reminders is not None:
-            self._reminders.set_root(folder)
+        if self._tasks_watcher is not None:
+            self._tasks_watcher.set_root(folder)
 
     def set_theme(self, theme: str):
         self._cfg["theme"] = theme
@@ -1979,22 +1924,12 @@ class MainWindow(QMainWindow):
         restyle_needed = values["theme"] != self._cfg.get("theme") or values[
             "accent_palette"
         ] != self._cfg.get("accent_palette")
-        scheduling_off = (
-            self._cfg.get("schedule_reminders", True)
-            and not values["schedule_reminders"]
-        )
         self._cfg.update(values)
         settings_manager.save(self._cfg)
         settings_manager.resolve_save_dir(self._cfg)
         if restyle_needed:
             self.theme_actions[values["theme"]].setChecked(True)
             self._restyle()
-        if self._reminders is not None:
-            self._reminders.set_scheduling(values["schedule_reminders"])
-            if scheduling_off:
-                # Leaving them registered would keep firing after the user
-                # asked for that to stop.
-                self._reminders.clear_schedule()
         self.line_numbers_action.setChecked(values["show_line_numbers"])
         self.toggle_line_numbers(values["show_line_numbers"])
         self.word_wrap_action.setChecked(values["word_wrap"])
@@ -2163,43 +2098,74 @@ class MainWindow(QMainWindow):
         self.activateWindow()
         self._offer_recovery()
         QTimer.singleShot(250, self._offer_legacy_migration)
-        self._start_reminders()
+        self._prune_empty_daily_notes()
+        self._start_task_watcher()
 
-    def _start_reminders(self):
-        """Begin watching dated to-do items.
+    def _prune_empty_daily_notes(self):
+        """Clear the empty day notes older versions left behind — once.
+
+        Only files still holding exactly their generated heading are touched,
+        so nothing typed can be lost. Latched in settings because after 4.0
+        no new ones appear and walking the folder every launch would be work
+        for nothing.
+        """
+        if self._cfg.get("daily_cleanup_done"):
+            return
+        self._cfg["daily_cleanup_done"] = True
+        settings_manager.save(self._cfg)
+        try:
+            removed = daily_notes.prune_empty(self._cfg["notes_root"])
+        except OSError:
+            log.warning("Could not tidy the Daily folder", exc_info=True)
+            return
+        if not removed:
+            return
+        log.info("Removed %d empty daily note(s)", len(removed))
+        self.sidebar.refresh()
+        self.statusBar().showMessage(
+            to_persian_digits(f"{len(removed)} یادداشت روزانهٔ خالی پاک شد"), 5000
+        )
+
+    def _install_tray(self):
+        """Put the app in the notification area, if there is one.
+
+        Without a tray there is nowhere to hide to, so the window keeps its
+        ordinary behaviour and closing it ends the process as before.
+        """
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        self._tray = Tray(_app_icon(), self)
+        self._tray.show()
+        # The window is no longer what keeps the process alive.
+        QApplication.setQuitOnLastWindowClosed(False)
+
+    def _start_task_watcher(self):
+        """Begin keeping the task counts fresh.
 
         Started here rather than in __init__ so nothing about it can show up
-        in startup time; the service itself defers its first scan further and
+        in startup time; the watcher itself defers its first scan further and
         does the folder walk on a worker thread.
         """
-        if self._reminders is not None or not QSystemTrayIcon.isSystemTrayAvailable():
+        if self._tasks_watcher is not None:
             return
-        self._reminders = ReminderService(
-            self._cfg["notes_root"],
-            _app_icon(),
-            self,
-            schedule=self._cfg.get("schedule_reminders", True),
-        )
-        self._reminders.task_activated.connect(self._open_task)
-        self._reminders.progress_changed.connect(self.update_today_meter)
-        self._reminders.open_count_changed.connect(self.update_open_task_count)
-        self._reminders.announced.connect(self.toast.show_task)
-        self._reminders.start()
+        self._tasks_watcher = TaskWatcher(self._cfg["notes_root"], self)
+        self._tasks_watcher.progress_changed.connect(self.update_today_meter)
+        self._tasks_watcher.open_count_changed.connect(self.update_open_task_count)
+        self._tasks_watcher.start()
 
-    def show_scheduled_reminder(self, identifier: str):
-        """A Windows scheduled task fired --remind <id>.
-
-        The service only knows the id after a scan, so if the app was just
-        launched by the task itself we ask for one and announce afterwards.
-        """
-        self._start_reminders()
-        if self._reminders is None:
-            return
-        if not self._reminders.show_by_id(identifier):
-            self._reminders.scanned_once.connect(
-                lambda: self._reminders.show_by_id(identifier)
-            )
-            self._reminders.check_now()
+    def _tab_for_pending(self, path: str) -> DocumentTab | None:
+        """An open, still-unsaved document already aimed at this filename."""
+        target = os.path.normcase(os.path.abspath(path))
+        for index in range(self.tabs.count()):
+            tab = self.tabs.widget(index)
+            if (
+                isinstance(tab, DocumentTab)
+                and not tab.path
+                and tab.pending_path
+                and os.path.normcase(os.path.abspath(tab.pending_path)) == target
+            ):
+                return tab
+        return None
 
     def _tab_for_path(self, path: str) -> DocumentTab | None:
         target = os.path.normcase(os.path.abspath(path))
@@ -2258,21 +2224,8 @@ class MainWindow(QMainWindow):
             return
         self.statusBar().showMessage("کار به فردا موکول شد", 3000)
 
-    def _snooze_minutes(self, path: str, line_number: int, minutes: int):
-        """"Later" on a reminder: forget it was announced, and look again.
-
-        Nothing is written — the task keeps its time. Dropping it from the
-        announced set is what lets the next scan raise it again.
-        """
-        if self._reminders is not None:
-            self._reminders.forget(path, line_number)
-            QTimer.singleShot(minutes * 60_000, self._reminders.check_now)
-        self.statusBar().showMessage(
-            to_persian_digits(f"یادآوری {minutes} دقیقه بعد تکرار می‌شود"), 4000
-        )
-
     def _open_task(self, path: str, line_number: int):
-        """Jump to the exact line a reminder came from."""
+        """Jump to the exact line a task came from."""
         if not self.open_file(path):
             return
         tab = self.current_document()
@@ -2404,16 +2357,46 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
+    def quit_application(self):
+        """Really leave — the tray menu's "خروج" and File > Exit.
+
+        Separate from closing the window, which now only hides it.
+        """
+        self._really_quitting = True
+        self.close()
+
     def closeEvent(self, event: QCloseEvent):
+        """Closing hides to the tray; quitting is a deliberate act.
+
+        Startup in the packaged build is dominated by Windows loading the Qt
+        runtime, which no amount of Python can shorten — so the process stays
+        alive and reopening costs nothing. Without a tray there is nowhere to
+        hide to, so that case still exits.
+        """
+        if not self._really_quitting and self._tray is not None:
+            self._save_window_state()
+            self.hide()
+            event.ignore()
+            self._announce_tray_once()
+            return
+
         self._closing_application = True
-        if self._reminders is not None:
-            self._reminders.stop()
+        if self._tasks_watcher is not None:
+            self._tasks_watcher.stop()
         self._write_recoveries()
         while self.tabs.count():
             if not self.close_tab(0, create_replacement=False):
                 self._closing_application = False
+                self._really_quitting = False
                 event.ignore()
                 return
+        self._save_window_state()
+        if self._tray is not None:
+            self._tray.hide()
+        event.accept()
+        QApplication.quit()
+
+    def _save_window_state(self):
         self._cfg["window_geometry"] = bytes(
             self.saveGeometry().toBase64()
         ).decode("ascii")
@@ -2421,4 +2404,24 @@ class MainWindow(QMainWindow):
             self._splitter.saveState().toBase64()
         ).decode("ascii")
         settings_manager.save(self._cfg)
-        event.accept()
+
+    def _announce_tray_once(self):
+        """Say where the window went — once, ever.
+
+        Hiding on close is surprising exactly once. After that the balloon
+        would be the annoyance the reminders were removed for being.
+        """
+        if self._cfg.get("tray_notice_shown"):
+            return
+        self._cfg["tray_notice_shown"] = True
+        settings_manager.save(self._cfg)
+        try:
+            self._tray.showMessage(
+                "Notepad Plus",
+                "برنامه در نوار وظیفه باز مانده تا دفعهٔ بعد فوری باز شود.\n"
+                "برای بستن کامل، روی آیکون راست‌کلیک کن و «خروج» را بزن.",
+                QSystemTrayIcon.MessageIcon.Information,
+                6000,
+            )
+        except Exception:
+            pass

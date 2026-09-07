@@ -41,6 +41,9 @@ class DocumentTab(QWidget):
         # the configured preference, and this is the fallback for direct use.
         direction_mode: str = "rtl",
         title: str | None = None,
+        # Where this document will be written the first time it is saved,
+        # for a note that has a name in mind but no file yet.
+        pending_path: str | None = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -48,6 +51,7 @@ class DocumentTab(QWidget):
         self.encoding = encoding
         self.recovery_id = recovery_id or new_recovery_id()
         self.untitled_title = title or "Untitled"
+        self.pending_path = str(Path(pending_path)) if pending_path else None
         self._counts: tuple[int, int] | None = None
 
         layout = QVBoxLayout(self)
@@ -74,7 +78,11 @@ class DocumentTab(QWidget):
 
     @property
     def display_name(self) -> str:
-        return Path(self.path).name if self.path else self.untitled_title
+        if self.path:
+            return Path(self.path).name
+        if self.pending_path:
+            return Path(self.pending_path).name
+        return self.untitled_title
 
     @property
     def text(self) -> str:

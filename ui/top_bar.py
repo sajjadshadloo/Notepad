@@ -66,7 +66,6 @@ class TopBar(QWidget):
     search_requested = pyqtSignal()
     sidebar_toggled = pyqtSignal()
     tasks_requested = pyqtSignal()
-    focus_toggled = pyqtSignal()
     theme_toggled = pyqtSignal()
     settings_requested = pyqtSignal()
 
@@ -179,7 +178,7 @@ class TopBar(QWidget):
         row.addStretch(1)
         return holder
 
-    # Right: tasks, focus, theme, settings
+    # Right: tasks, theme, settings
 
     def _build_right(self) -> QWidget:
         block = QWidget()
@@ -199,11 +198,6 @@ class TopBar(QWidget):
         self.tasks_button.clicked.connect(self.tasks_requested)
         row.addWidget(self.tasks_button)
 
-        self.focus_button = _IconButton("focus", "Focus mode — Ctrl+.")
-        self.focus_button.setFixedWidth(BUTTON_SIZE)
-        self.focus_button.setCheckable(True)
-        self.focus_button.clicked.connect(self.focus_toggled)
-        row.addWidget(self.focus_button)
 
         self.theme_button = _IconButton("theme", "Dark / Light")
         self.theme_button.setFixedWidth(BUTTON_SIZE)
@@ -226,15 +220,11 @@ class TopBar(QWidget):
         """Blank hides the number, so the button is a plain square again."""
         self.tasks_button.setText(f" {count}" if count else "")
 
-    def set_focus_active(self, active: bool):
-        self.focus_button.setChecked(active)
-
     def refresh_palette(self):
         """Re-render the stroke icons and the brand square after a restyle."""
         for button in (
             self.sidebar_button,
             self.tasks_button,
-            self.focus_button,
             self.theme_button,
             self.settings_button,
         ):

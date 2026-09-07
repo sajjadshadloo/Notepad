@@ -22,7 +22,6 @@ a = Analysis(
         'PyQt6.QtGui',
         'PyQt6.QtWidgets',
         'PyQt6.QtNetwork',
-        'PyQt6.QtPrintSupport',
     ],
     hookspath=[],
     hooksconfig={},
@@ -53,10 +52,10 @@ a = Analysis(
         'PyQt6.QtCharts',
         'PyQt6.QtDataVisualization',
         'PyQt6.QtSpatialAudio',
-        # QtPdf is the PDF *viewer* module. PDF export goes through
-        # QtPrintSupport and QPdfWriter in QtGui, so this is not it.
+        # Nothing prints or renders PDF since 4.0 dropped the exporters.
         'PyQt6.QtPdf',
         'PyQt6.QtPdfWidgets',
+        'PyQt6.QtPrintSupport',
         'tkinter',
         'pytest',
         'unittest',
@@ -77,8 +76,11 @@ UNUSED_BINARIES = (
     # Loaded only when a GPU driver is missing *and* something asks for GL;
     # QtWidgets paints through the raster engine and never does.
     'opengl32sw.dll',
-    # The PDF *viewer* module. Exporting goes through QPdfWriter in QtGui.
+    # PDF, in both its forms. 4.0 removed the PDF and HTML exporters — the
+    # only thing here that ever printed — so neither the viewer module nor
+    # the print machinery has an importer left.
     'qt6pdf.dll',
+    'qt6printsupport.dll',
     # OpenSSL, pulled in with QtNetwork. The only networking here is a local
     # named pipe for the single-instance guard, which never negotiates TLS.
     'libssl-3.dll',

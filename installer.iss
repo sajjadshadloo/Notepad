@@ -2,7 +2,7 @@
 ; Build:  ISCC.exe installer.iss   (after PyInstaller has produced dist\NotepadPlus\)
 
 #define MyAppName "Notepad Plus"
-#define MyAppVersion "3.11.0"
+#define MyAppVersion "4.0.0"
 #define MyAppPublisher "Sajjad"
 #define MyAppExeName "NotepadPlus.exe"
 
@@ -29,8 +29,15 @@ ArchitecturesInstallIn64BitMode=x64compatible
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional shortcuts:"
 
 [InstallDelete]
-; Drop earlier versions' icon files, so the folder does not collect one per
-; release. Runs before the new files are copied.
+; Runs before the new files are copied.
+;
+; Inno only overwrites what it ships, so a file a release stops shipping stays
+; behind forever. Upgrading 3.11 to 4.0 left Qt6PrintSupport.dll and its .pyd
+; -- dropped along with the PDF exporter -- plus assets\build_icon.py, dead
+; since 3.x. Clearing the whole PyInstaller folder makes every install match
+; what was actually built, with no list to keep up to date.
+Type: filesandordirs; Name: "{app}\_internal"
+; The per-release icon files, so the folder does not collect one per version.
 Type: files; Name: "{app}\NotepadPlus.ico"
 Type: files; Name: "{app}\NotepadPlus-*.ico"
 
@@ -55,8 +62,9 @@ Root: HKA; Subkey: "Software\Classes\.txt\OpenWithList\{#MyAppExeName}"; ValueTy
 Root: HKA; Subkey: "Software\Classes\.md\OpenWithList\{#MyAppExeName}"; ValueType: none; Flags: uninsdeletekey
 
 [UninstallRun]
-; Reminders registered with Windows would otherwise keep firing after the
-; app is gone, pointing at an executable that no longer exists.
+; 3.x registered reminders with Windows Task Scheduler. 4.0 removed that, but
+; an upgrade from an older version can still leave tasks behind, so the
+; uninstaller keeps clearing them.
 Filename: "{cmd}"; Parameters: "/C schtasks /Delete /TN ""NotepadPlus"" /F"; Flags: runhidden; RunOnceId: "DelReminderTasks"
 
 [Run]
