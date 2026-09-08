@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import (
 from ui.icons import icon, icon_size
 from ui.styles import current_palette
 
-PAGES = (("notes", "دفترچه"), ("calendar", "تقویم"), ("editor", "ویرایش"))
+PAGES = (("home", "خانه"), ("editor", "ویرایش"))
 
 BAR_HEIGHT = 44
 SIDE_BLOCK = 270
@@ -66,8 +66,9 @@ class _IconButton(QToolButton):
 
 class TopBar(QWidget):
     search_requested = pyqtSignal()
-    # "notes" | "calendar" | "editor" — which of the three pages to show.
+    # "home" | "editor" — which of the two pages to show.
     page_requested = pyqtSignal(str)
+    widget_toggled = pyqtSignal()
     tasks_requested = pyqtSignal()
     theme_toggled = pyqtSignal()
     settings_requested = pyqtSignal()
@@ -134,6 +135,9 @@ class TopBar(QWidget):
             self.page_buttons[key] = button
         row.addWidget(switch, 1)
         return block
+
+    def set_widget_active(self, active: bool):
+        self.widget_button.setChecked(active)
 
     def set_page(self, key: str):
         for name, button in self.page_buttons.items():
@@ -215,6 +219,14 @@ class TopBar(QWidget):
 
         # The tasks button carries the open count, so it is the one button
         # here that is wider than a square.
+        self.widget_button = _IconButton(
+            "widget", "ویجت روز روی دسکتاپ — Ctrl+Shift+W"
+        )
+        self.widget_button.setFixedWidth(BUTTON_SIZE)
+        self.widget_button.setCheckable(True)
+        self.widget_button.clicked.connect(self.widget_toggled)
+        row.addWidget(self.widget_button)
+
         self.tasks_button = _IconButton("tasks", "My tasks — Ctrl+T")
         self.tasks_button.setToolButtonStyle(
             Qt.ToolButtonStyle.ToolButtonTextBesideIcon
@@ -245,6 +257,7 @@ class TopBar(QWidget):
         """Re-render the stroke icons and the brand square after a restyle."""
         for button in (
             self.tasks_button,
+            self.widget_button,
             self.theme_button,
             self.settings_button,
         ):

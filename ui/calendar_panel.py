@@ -1,7 +1,9 @@
-"""A compact Jalali month grid for the sidebar.
+"""A compact Jalali month grid.
 
-Clicking a day opens that day's note. Days that already have one are marked,
-so the month doubles as a map of what you have actually written down.
+Clicking a day picks it. Days that carry work are marked, so the month
+doubles as a map of where the week is heavy — the caller says which those
+are, because 4.2 stopped keeping a file per day and the grid can no longer
+read that off the folder.
 """
 from datetime import date
 
@@ -11,14 +13,12 @@ from PyQt6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
-    QPushButton,
     QSizePolicy,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
-from core import daily_notes
 from core.jalali import (
     MONTHS,
     column_of,
@@ -36,11 +36,14 @@ FRIDAY_COLUMN = 6
 class CalendarPanel(QWidget):
     day_activated = pyqtSignal(date)
 
-    def __init__(self, root: str, parent=None):
+    def __init__(self, root: str = "", parent=None):
         super().__init__(parent)
         self.setObjectName("calendarPanel")
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self._root = root
+        # Days that have at least one task. Set by whoever owns the tasks.
+        self._marked: set = set()
+        self._selected = date.today()
         today = date.today()
         self._year, self._month, _ = from_gregorian(today)
 
@@ -55,14 +58,9 @@ class CalendarPanel(QWidget):
         self._title = QLabel()
         self._title.setObjectName("sidebarHeader")
         self._title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._today_button = QPushButton("امروز")
-        self._today_button.setObjectName("tagChip")
-        self._today_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._today_button.clicked.connect(self.go_to_today)
         header.addWidget(self._next)
         header.addWidget(self._title, 1)
         header.addWidget(self._previous)
-        header.addWidget(self._today_button)
         outer.addLayout(header)
 
         self._grid = QGridLayout()
@@ -91,14 +89,29 @@ class CalendarPanel(QWidget):
         self._root = root
         self.refresh()
 
+    def set_marked_days(self, days):
+        """Which days to show as carrying work."""
+        marked = set(days)
+        if marked != self._marked:
+            self._marked = marked
+            self.refresh()
+
+    def selected_day(self):
+        return self._selected
+
+    def choose(self, day):
+        """Pick a day, redraw the highlight, and tell whoever is listening."""
+        self._selected = day
+        self.refresh()
+        self.day_activated.emit(day)
+
     def shift(self, delta: int):
         self._year, self._month = shift_month(self._year, self._month, delta)
         self.refresh()
 
     def go_to_today(self):
         self._year, self._month, _ = from_gregorian(date.today())
-        self.refresh()
-        self.day_activated.emit(date.today())
+        self.choose(date.today())
 
     def refresh(self):
         self._title.setText(
@@ -109,7 +122,6 @@ class CalendarPanel(QWidget):
             cell.deleteLater()
         self._cells.clear()
 
-        written = daily_notes.existing_days(self._root)
         today = date.today()
         row = 1
         for day in month_days(self._year, self._month):
@@ -123,16 +135,17 @@ class CalendarPanel(QWidget):
             cell.setMinimumSize(QSize(24, 24))
             cell.setProperty("today", day == today)
             # A dot rather than a colour, so it still reads in either theme.
-            stem = daily_notes.path_for(self._root, day).stem
-            cell.setProperty("written", stem in written)
-            if stem in written:
+            carries_work = day in self._marked
+            cell.setProperty("written", carries_work)
+            cell.setProperty("chosen", day == self._selected)
+            if carries_work:
                 bold = QFont(cell.font())
                 bold.setBold(True)
                 cell.setFont(bold)
             if column == FRIDAY_COLUMN:
                 cell.setProperty("holiday", True)
             cell.setObjectName("calendarDay")
-            cell.clicked.connect(lambda _checked=False, d=day: self.day_activated.emit(d))
+            cell.clicked.connect(lambda _checked=False, d=day: self.choose(d))
             self._grid.addWidget(cell, row, column)
             self._cells.append(cell)
             if column == FRIDAY_COLUMN:

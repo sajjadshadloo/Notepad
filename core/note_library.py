@@ -95,13 +95,21 @@ def summarise(text: str, path: Path, folder: str, modified: float) -> NoteCard:
 
 
 def load_library(root: str | Path) -> list[NoteCard]:
-    """Every note under `root`, newest first. Meant to run off the UI thread."""
+    """Every note under `root`, newest first.
+
+    The tasks file is left out: it has the whole right-hand rail to itself,
+    and a card repeating what is already on screen beside it is noise.
+    """
+    from core.task_file import FILE_NAME as TASKS_FILE
+
     root_path = Path(root)
     cards: list[NoteCard] = []
     if not root_path.exists():
         return cards
     for path in root_path.rglob("*"):
         if not path.is_file() or path.suffix.lower() not in NOTE_EXTENSIONS:
+            continue
+        if path.parent == root_path and path.name == TASKS_FILE:
             continue
         try:
             loaded = read_text_file(path)

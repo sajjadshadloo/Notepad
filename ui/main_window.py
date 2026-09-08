@@ -40,7 +40,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from core import daily_notes
+from core import task_file
 import core.note_index as note_index
 import core.settings_manager as settings_manager
 from core.external_change_monitor import ExternalChangeMonitor
@@ -75,7 +75,7 @@ from ui.settings_dialog import SettingsDialog
 from ui.stamp_picker import StampPicker
 from ui.shortcuts_dialog import ShortcutsDialog
 from ui.day_widget import DayWidget
-from ui.month_view import MonthView
+from ui.today_rail import TodayRail
 from ui.notes_board import NotesBoard
 from ui.styles import build_stylesheet, current_palette, resolve_theme
 
@@ -85,7 +85,7 @@ log = logging.getLogger(__name__)
 TAB_DOT_SIZE = 6
 
 APP_TITLE = "Notepad Plus"
-APP_VERSION = "4.1.3"
+APP_VERSION = "4.2.0"
 
 # Line endings, as characters rather than an escape.
 NEWLINE_CHARS = chr(13) + chr(10)
@@ -465,7 +465,7 @@ class MainWindow(QMainWindow):
             self.new_document()
             # A file on the command line means the editor, whatever page the
             # window was left on last time.
-            self.show_page(self._cfg.get("page", "notes"))
+            self.show_page(self._cfg.get("page", "home"))
         else:
             self.show_page("editor")
 
@@ -501,7 +501,7 @@ class MainWindow(QMainWindow):
         )
         self.today_action = self._action("My &Tasks…", self.show_today, "Ctrl+T")
         self.daily_note_action = self._action(
-            "Today's &Note", self.open_daily_note, "Ctrl+Shift+D"
+            "&Tasks File", self.open_tasks_file, "Ctrl+Shift+D"
         )
         self.save_action = self._action("&Save", self.save_current, "Ctrl+S")
         self.save_as_action = self._action(
@@ -840,15 +840,24 @@ class MainWindow(QMainWindow):
         self.notes_board.note_activated.connect(self.open_note_from_board)
         self.notes_board.new_note_requested.connect(self.new_note_from_board)
 
-        self.month_view = MonthView()
-        self.month_view.set_root(self._cfg["notes_root"])
-        self.month_view.task_added.connect(self._add_day_task)
-        self.month_view.task_toggled.connect(self.set_task_done)
-        self.month_view.task_opened.connect(self.open_task_in_editor)
-        self.month_view.note_requested.connect(self.open_daily_note)
+        self.rail = TodayRail()
+        self.rail.task_added.connect(self._add_day_task)
+        self.rail.task_toggled.connect(self.set_task_done)
+        self.rail.task_opened.connect(self.open_task_in_editor)
+        self.rail.file_requested.connect(self.open_tasks_file)
 
-        # The editor keeps its tab strip and format bar; they belong to it and
-        # mean nothing on the other two pages, so they live on this page
+        # Home: the notes on the left, today on the right, both at once. The
+        # calendar used to be a page of its own, which put three moves
+        # between wanting to tick something off and doing it.
+        home = QWidget()
+        home_row = QHBoxLayout(home)
+        home_row.setContentsMargins(0, 0, 0, 0)
+        home_row.setSpacing(0)
+        home_row.addWidget(self.notes_board, 1)
+        home_row.addWidget(self.rail)
+
+        # The editor keeps its tab strip and format bar; they belong to it
+        # and mean nothing on the home screen, so they live on this page
         # rather than in the window's own column.
         editor_page = QWidget()
         editor_column = QVBoxLayout(editor_page)
@@ -859,8 +868,7 @@ class MainWindow(QMainWindow):
         editor_column.addWidget(self.tabs.pages, 1)
 
         self.pages = QStackedWidget()
-        self.pages.addWidget(self.notes_board)
-        self.pages.addWidget(self.month_view)
+        self.pages.addWidget(home)
         self.pages.addWidget(editor_page)
 
         self.top_bar = TopBar()
@@ -868,6 +876,7 @@ class MainWindow(QMainWindow):
         self.top_bar.tasks_requested.connect(self.show_today)
         self.top_bar.theme_toggled.connect(self.cycle_theme)
         self.top_bar.settings_requested.connect(self.show_settings)
+        self.top_bar.widget_toggled.connect(self.toggle_day_widget)
         self.top_bar.page_requested.connect(self.show_page)
 
         shell = QWidget()
@@ -1165,40 +1174,25 @@ class MainWindow(QMainWindow):
         for path in paths:
             self.open_file(path)
 
-    def open_daily_note(self, day=None):
-        """Ctrl+Shift+D, and the calendar's day-note button.
+    def open_tasks_file(self):
+        """Ctrl+Shift+D — open کارها.md, where every dated task lives.
 
-        Nothing is written to disk here. Until 4.0 this created the file on
-        the spot, so browsing the calendar left a trail of notes containing
-        only their own heading — seven of them, every one empty, in a folder
-        of twenty-three. Now the day opens as an unsaved document that knows
-        its filename, and becomes a file the moment you save something.
+        4.1 kept a note per day and this opened that day's file. One file per
+        day fragmented the work into a folder of date-named files, each with
+        a heading nobody wrote, so 4.2 keeps them all in one.
         """
-        from datetime import date as _date
-
-        when = day if isinstance(day, _date) else _date.today()
-        path = daily_notes.path_for(self._cfg["notes_root"], when)
+        path = task_file.path_for(self._cfg["notes_root"])
         if not path.exists():
             existing = self._tab_for_pending(str(path))
             if existing is None:
-                # Same courtesy open_file does: a blank untouched tab is a
-                # placeholder, not a document, so the day takes its place
-                # instead of appearing beside a stray "Untitled".
                 placeholder = self._placeholder_tab()
-                self._make_document(
-                    text=daily_notes.starter_text(when),
-                    pending_path=str(path),
-                )
+                self._make_document(text="", pending_path=str(path))
                 self._discard_placeholder(placeholder)
             else:
                 self.tabs.setCurrentWidget(existing)
         elif not self.open_file(str(path)):
             return
-        # Showing the editor is the whole point of the button: without it the
-        # tab opened behind the calendar and the click looked like it did
-        # nothing at all.
         self.show_page("editor")
-        # Land at the end, ready to type rather than at the heading.
         editor = self.current_document().editor
         cursor = editor.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
@@ -1858,7 +1852,6 @@ class MainWindow(QMainWindow):
         self._cfg["notes_root"] = folder
         settings_manager.save(self._cfg)
         self.notes_board.set_root(folder)
-        self.month_view.set_root(folder)
         if self._tasks_watcher is not None:
             self._tasks_watcher.set_root(folder)
 
@@ -2074,34 +2067,33 @@ class MainWindow(QMainWindow):
         self.activateWindow()
         self._offer_recovery()
         QTimer.singleShot(250, self._offer_legacy_migration)
-        self._prune_empty_daily_notes()
+        self._import_legacy_daily_notes()
         self._start_task_watcher()
         if self._cfg.get("day_widget"):
             self._show_day_widget()
 
-    def _prune_empty_daily_notes(self):
-        """Clear the empty day notes older versions left behind — once.
+    def _import_legacy_daily_notes(self):
+        """Fold a 4.1 Daily folder into the one tasks file — once.
 
-        Only files still holding exactly their generated heading are touched,
-        so nothing typed can be lost. Latched in settings because after 4.0
-        no new ones appear and walking the folder every launch would be work
-        for nothing.
+        A day file is removed only when everything in it was taken; one that
+        also holds prose stays, because that prose is a note. Latched in
+        settings: after this there is no Daily folder to walk.
         """
         if self._cfg.get("daily_cleanup_done"):
             return
         self._cfg["daily_cleanup_done"] = True
         settings_manager.save(self._cfg)
         try:
-            removed = daily_notes.prune_empty(self._cfg["notes_root"])
+            moved = task_file.import_daily_notes(self._cfg["notes_root"])
         except OSError:
-            log.warning("Could not tidy the Daily folder", exc_info=True)
+            log.warning("Could not fold in the Daily folder", exc_info=True)
             return
-        if not removed:
+        if not moved:
             return
-        log.info("Removed %d empty daily note(s)", len(removed))
+        log.info("Moved %d task(s) out of the Daily folder", moved)
         self.notes_board.reload()
         self.statusBar().showMessage(
-            to_persian_digits(f"{len(removed)} یادداشت روزانهٔ خالی پاک شد"), 5000
+            to_persian_digits(f"{moved} کار به فایل کارها منتقل شد"), 5000
         )
 
     def toggle_day_widget(self, shown: bool | None = None):
@@ -2111,6 +2103,7 @@ class MainWindow(QMainWindow):
         self._cfg["day_widget"] = bool(shown)
         settings_manager.save(self._cfg)
         self.day_widget_action.setChecked(bool(shown))
+        self.top_bar.set_widget_active(bool(shown))
         if not shown:
             if self._day_widget is not None:
                 self._day_widget.hide()
@@ -2161,26 +2154,25 @@ class MainWindow(QMainWindow):
 
     # Pages
 
-    PAGE_INDEX = {"notes": 0, "calendar": 1, "editor": 2}
+    # "home" is the notes and the rail together; "editor" is a document.
+    PAGE_INDEX = {"home": 0, "editor": 1}
 
     def show_page(self, key: str):
-        """Switch between the notes board, the calendar and the editor."""
         index = self.PAGE_INDEX.get(key)
         if index is None:
             return
         self.pages.setCurrentIndex(index)
         self.top_bar.set_page(key)
         # Cursor position, word count and the encoding chip describe a
-        # document; on the boards there is no document for them to describe.
+        # document; on the home screen there is none to describe.
         self.statusBar().setVisible(key == "editor")
         self._cfg["page"] = key
         settings_manager.save(self._cfg)
-        # Each board is a view over files that anything may have changed, so
-        # it re-reads on the way in rather than trusting what it last drew.
-        if key == "notes":
+        # Home is a view over files anything may have changed, so it re-reads
+        # on the way in rather than trusting what it last drew.
+        if key == "home":
             self.notes_board.reload()
-        elif key == "calendar":
-            self.refresh_calendar()
+            self.refresh_tasks()
         else:
             tab = self.current_document()
             if tab:
@@ -2198,28 +2190,37 @@ class MainWindow(QMainWindow):
         self._open_task(path, line_number)
         self.show_page("editor")
 
-    def refresh_calendar(self):
-        """Hand the calendar every dated task, off the UI thread."""
+    def refresh_tasks(self):
+        """Hand the rail every dated task."""
         if self._tasks_watcher is None:
             self._start_task_watcher()
         if self._tasks_watcher is not None:
-            self.month_view.set_tasks(self._tasks_watcher.all_tasks())
+            self.rail.set_tasks(self._tasks_watcher.all_tasks())
             self._tasks_watcher.check_now()
 
     def _add_day_task(self, day, text: str):
         if not self.add_task_to_day(day, text):
             return
-        # Read that one note back now. The background scan will agree in a
-        # minute or two, but waiting for it means typing a task and watching
-        # the day stay empty, which reads as nothing having happened.
-        path = daily_notes.path_for(self._cfg["notes_root"], day)
+        # Read the file back now. The background scan will agree in a minute
+        # or two, but waiting for it means typing a task and watching the day
+        # stay empty, which reads as nothing having happened.
+        self._reread_tasks_for(day)
+        self.statusBar().showMessage("کار اضافه شد", 2500)
+
+    def _reread_tasks_for(self, day):
+        path = task_file.path_for(self._cfg["notes_root"])
+        if not path.exists():
+            return
         try:
-            self.month_view.replace_day(
-                day, parse_document(read_text_file(path).text, str(path.resolve()))
+            found = parse_document(
+                read_text_file(path).text, str(path.resolve())
             )
         except (OSError, UnicodeError):
             log.warning("Could not re-read %s", path, exc_info=True)
-        self.statusBar().showMessage("کار به این روز اضافه شد", 2500)
+            return
+        self.rail.replace_day(
+            day, [t for t in found if t.due and t.due.date() == day]
+        )
 
     def _start_task_watcher(self):
         """Begin keeping the task counts fresh.
@@ -2236,7 +2237,7 @@ class MainWindow(QMainWindow):
         # The calendar redraws from every completed scan, so a change made in
         # the editor shows up there without anyone asking.
         self._tasks_watcher.scanned.connect(
-            lambda: self.month_view.set_tasks(self._tasks_watcher.all_tasks())
+            lambda: self.rail.set_tasks(self._tasks_watcher.all_tasks())
         )
         self._tasks_watcher.scanned.connect(self.refresh_day_widget)
         self._tasks_watcher.start()
@@ -2334,11 +2335,11 @@ class MainWindow(QMainWindow):
             self._notify_tasks_changed()
 
     def add_task_to_day(self, day, text: str) -> bool:
-        """Put a new task on a calendar day, in that day's note."""
+        """Add a dated task to the one tasks file."""
         if not text.strip():
             return False
         try:
-            path = daily_notes.add_task(self._cfg["notes_root"], day, text)
+            path = task_file.add_task(self._cfg["notes_root"], day, text)
         except (OSError, UnicodeError):
             log.warning("Could not add a task for %s", day, exc_info=True)
             self.statusBar().showMessage("افزودن این کار ممکن نشد", 4000)

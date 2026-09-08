@@ -4,11 +4,11 @@ The calendar, the day widget and the tasks window all edit lines they do not
 own. A note that happens to be open with unsaved work is the case that loses
 typing if this is done naively, so it is covered first.
 """
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
-from core import daily_notes, settings_manager
+from core import settings_manager, task_file
 from core.file_service import read_text_file
 from core.tasks import parse_document
 from ui.main_window import MainWindow
@@ -47,7 +47,7 @@ def test_adding_a_task_creates_the_day_note(window):
     day = date(2026, 8, 27)
     assert window.add_task_to_day(day, "فاکتور مروارید")
 
-    path = daily_notes.path_for(root, day)
+    path = task_file.path_for(root)
     assert path.exists()
     texts = [t.text for t in _tasks_in(path)]
     assert texts == ["فاکتور مروارید"]
@@ -56,23 +56,21 @@ def test_adding_a_task_creates_the_day_note(window):
 def test_a_task_added_from_the_calendar_carries_that_day(window):
     day = date(2026, 8, 27)
     window.add_task_to_day(day, "تماس با حمید")
-    task = _tasks_in(daily_notes.path_for(window._cfg["notes_root"], day))[0]
+    task = _tasks_in(task_file.path_for(window._cfg["notes_root"]))[0]
     assert task.due.date() == day
     assert not task.has_time
 
 
 def test_a_blank_task_is_refused(window):
     assert not window.add_task_to_day(date(2026, 8, 27), "   ")
-    assert not daily_notes.path_for(
-        window._cfg["notes_root"], date(2026, 8, 27)
-    ).exists()
+    assert not task_file.path_for(window._cfg["notes_root"]).exists()
 
 
 def test_two_tasks_on_one_day_share_the_note(window):
     day = date(2026, 8, 27)
     window.add_task_to_day(day, "یک")
     window.add_task_to_day(day, "دو")
-    path = daily_notes.path_for(window._cfg["notes_root"], day)
+    path = task_file.path_for(window._cfg["notes_root"])
     assert [t.text for t in _tasks_in(path)] == ["یک", "دو"]
 
 
@@ -81,7 +79,7 @@ def test_two_tasks_on_one_day_share_the_note(window):
 def test_ticking_a_task_writes_it_to_a_closed_file(window):
     day = date(2026, 8, 27)
     window.add_task_to_day(day, "کار")
-    path = daily_notes.path_for(window._cfg["notes_root"], day)
+    path = task_file.path_for(window._cfg["notes_root"])
     task = _tasks_in(path)[0]
 
     window.set_task_done(str(path), task.line_number, True)
@@ -91,7 +89,7 @@ def test_ticking_a_task_writes_it_to_a_closed_file(window):
 def test_unticking_puts_it_back(window):
     day = date(2026, 8, 27)
     window.add_task_to_day(day, "کار")
-    path = daily_notes.path_for(window._cfg["notes_root"], day)
+    path = task_file.path_for(window._cfg["notes_root"])
     line = _tasks_in(path)[0].line_number
 
     window.set_task_done(str(path), line, True)
@@ -102,7 +100,7 @@ def test_unticking_puts_it_back(window):
 def test_ticking_a_task_that_is_already_done_changes_nothing(window):
     day = date(2026, 8, 27)
     window.add_task_to_day(day, "کار")
-    path = daily_notes.path_for(window._cfg["notes_root"], day)
+    path = task_file.path_for(window._cfg["notes_root"])
     line = _tasks_in(path)[0].line_number
     window.set_task_done(str(path), line, True)
     before = path.read_text(encoding="utf-8")
@@ -119,7 +117,7 @@ def test_an_open_note_is_edited_through_its_document_not_the_disk(window):
     """
     day = date(2026, 8, 27)
     window.add_task_to_day(day, "کار")
-    path = daily_notes.path_for(window._cfg["notes_root"], day)
+    path = task_file.path_for(window._cfg["notes_root"])
     window.open_file(str(path))
     tab = window.current_document()
 
@@ -140,7 +138,7 @@ def test_an_open_note_is_edited_through_its_document_not_the_disk(window):
 def test_the_change_to_an_open_note_is_one_undo_step(window):
     day = date(2026, 8, 27)
     window.add_task_to_day(day, "کار")
-    path = daily_notes.path_for(window._cfg["notes_root"], day)
+    path = task_file.path_for(window._cfg["notes_root"])
     window.open_file(str(path))
     tab = window.current_document()
     before = tab.text
@@ -165,7 +163,7 @@ def test_a_line_that_is_not_a_task_is_left_alone(window):
 def test_a_line_number_past_the_end_is_survivable(window):
     day = date(2026, 8, 27)
     window.add_task_to_day(day, "کار")
-    path = daily_notes.path_for(window._cfg["notes_root"], day)
+    path = task_file.path_for(window._cfg["notes_root"])
     before = path.read_text(encoding="utf-8")
 
     window.set_task_done(str(path), 999, True)
@@ -182,44 +180,49 @@ def test_a_new_task_appears_in_the_panel_at_once(window):
     """No waiting for the background scan — that reads as a dead Enter key."""
     window.show_page("calendar")
     today = date.today()
-    window.month_view.select_day(today)
+    window.rail.show_day(today)
 
-    window.month_view._input.setText("فاکتور مروارید")
-    window.month_view._submit()
+    window.rail.input.setText("فاکتور مروارید")
+    window.rail._submit()
 
-    assert window.month_view._list.texts() == ["فاکتور مروارید"]
-    assert [t.text for t in window.month_view.tasks_on(today)] == ["فاکتور مروارید"]
+    assert window.rail.list.texts() == ["فاکتور مروارید"]
+    assert [t.text for t in window.rail.tasks_on(today)] == ["فاکتور مروارید"]
 
 
 def test_a_second_task_joins_the_first_rather_than_replacing_it(window):
     window.show_page("calendar")
     today = date.today()
-    window.month_view.select_day(today)
+    window.rail.show_day(today)
     for text in ("یک", "دو"):
-        window.month_view._input.setText(text)
-        window.month_view._submit()
+        window.rail.input.setText(text)
+        window.rail._submit()
 
-    assert set(window.month_view._list.texts()) == {"یک", "دو"}
+    assert set(window.rail.list.texts()) == {"یک", "دو"}
 
 
-def test_opening_a_days_note_switches_to_the_editor(window):
-    """The tab used to open behind the calendar, so the button looked dead."""
-    window.show_page("calendar")
-    window.open_daily_note(date(2026, 8, 27))
+def test_opening_the_tasks_file_switches_to_the_editor(window):
+    """The tab used to open behind the home screen, so it looked dead."""
+    window.add_task_to_day(date(2026, 8, 27), "کار")
+    window.show_page("home")
+    window.open_tasks_file()
 
     assert window.pages.currentIndex() == window.PAGE_INDEX["editor"]
-    assert window.current_document().display_name == "1405-06-05.md"
+    assert window.current_document().display_name == "کارها.md"
 
 
-def test_a_day_with_no_note_offers_to_write_one(window):
-    window.month_view.set_root(window._cfg["notes_root"])
-    window.month_view.select_day(date(2026, 8, 27))
-    assert window.month_view._open_note.text() == "نوشتن یادداشت این روز"
+def test_the_tasks_file_opens_even_before_it_exists(window):
+    """Nothing is written until you save — the same as a new document."""
+    window.open_tasks_file()
+    tab = window.current_document()
+    assert tab.display_name == "کارها.md"
+    assert tab.path is None
+    assert not task_file.path_for(window._cfg["notes_root"]).exists()
 
 
-def test_once_the_day_has_a_note_the_button_says_open(window):
-    window.month_view.set_root(window._cfg["notes_root"])
-    day = date(2026, 8, 27)
-    window.add_task_to_day(day, "کار")
-    window.month_view.select_day(day)
-    assert window.month_view._open_note.text() == "باز کردن یادداشت روز"
+def test_the_rail_returns_to_today_after_visiting_another_day(window):
+    window.show_page("home")
+    later = date.today() + timedelta(days=4)
+    window.rail.show_day(later)
+    assert window.rail.selected_day() == later
+    window.rail.show_day(date.today())
+    assert window.rail.selected_day() == date.today()

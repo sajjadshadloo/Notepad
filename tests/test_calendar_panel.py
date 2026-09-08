@@ -1,6 +1,5 @@
 from datetime import date, timedelta
 
-from core import daily_notes
 from core.jalali import column_of, from_gregorian, is_leap, month_days, month_length, shift_month
 from ui.calendar_panel import FRIDAY_COLUMN, WEEKDAY_INITIALS, CalendarPanel
 
@@ -38,18 +37,25 @@ def test_shift_month_rolls_the_year():
     assert shift_month(1405, 6, 12) == (1406, 6)
 
 
-def test_panel_shows_a_cell_per_day_and_marks_written_ones(tmp_path, qapp):
+def test_panel_shows_a_cell_per_day_and_marks_the_ones_it_is_told(tmp_path, qapp):
+    """4.2: the grid no longer reads the folder — its owner says which days
+    carry work, because there is no longer a file per day to look for."""
     written = date.today()
-    path = daily_notes.path_for(tmp_path, written)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("x", encoding="utf-8")
-
     panel = CalendarPanel(str(tmp_path))
+    panel.set_marked_days({written})
+
     jy, jm, _ = from_gregorian(written)
     assert len(panel._cells) == month_length(jy, jm)
     marked = [c for c in panel._cells if c.property("written")]
     assert len(marked) == 1
     assert sum(1 for c in panel._cells if c.property("today")) == 1
+
+
+def test_the_chosen_day_is_marked_apart_from_today(tmp_path, qapp):
+    panel = CalendarPanel(str(tmp_path))
+    panel.choose(date.today() + timedelta(days=1))
+    chosen = [c for c in panel._cells if c.property("chosen")]
+    assert len(chosen) == 1
 
 
 def test_clicking_a_day_reports_that_date(tmp_path, qapp):

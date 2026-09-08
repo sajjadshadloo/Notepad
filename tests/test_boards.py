@@ -1,4 +1,4 @@
-"""The three surfaces 4.1 added: the notes board, the month, the day widget.
+"""The three surfaces: the notes board, the today rail, the day widget.
 
 All three are views over the same files, so what they must never do is
 disagree with each other or invent state of their own.
@@ -7,12 +7,12 @@ from datetime import date, timedelta
 
 import pytest
 
-from core import daily_notes
+from core import task_file
 from core.note_library import load_library
 from core.task_scan import scan_folder
 from ui.day_widget import DayWidget
-from ui.month_view import MonthView
 from ui.notes_board import ALL_LABEL, NotesBoard
+from ui.today_rail import TodayRail
 
 
 @pytest.fixture
@@ -28,9 +28,9 @@ def notes(tmp_path):
 def dated(notes):
     """A folder with real dated work spread over three days."""
     today = date.today()
-    daily_notes.add_task(notes, today, "فاکتور مروارید")
-    daily_notes.add_task(notes, today, "تماس با حمید")
-    daily_notes.add_task(notes, today + timedelta(days=2), "دیپلوی اطلس")
+    task_file.add_task(notes, today, "فاکتور مروارید")
+    task_file.add_task(notes, today, "تماس با حمید")
+    task_file.add_task(notes, today + timedelta(days=2), "دیپلوی اطلس")
     return notes
 
 
@@ -111,10 +111,10 @@ def test_opening_a_card_reports_its_path(qapp, notes):
     board.deleteLater()
 
 
-# Month
+# The today rail
 
-def test_the_month_shows_a_days_tasks_in_its_cell(qapp, dated):
-    view = MonthView()
+def test_the_rail_holds_a_days_tasks(qapp, dated):
+    view = TodayRail()
     view.set_tasks(scan_folder(str(dated)))
     today = date.today()
     assert {t.text for t in view.tasks_on(today)} == {
@@ -124,9 +124,9 @@ def test_the_month_shows_a_days_tasks_in_its_cell(qapp, dated):
     view.deleteLater()
 
 
-def test_undated_tasks_never_reach_the_calendar(qapp, dated):
-    """The folder has an undated task; a calendar has nowhere to put it."""
-    view = MonthView()
+def test_undated_tasks_never_reach_the_rail(qapp, dated):
+    """The folder has an undated task; a day list has nowhere to put it."""
+    view = TodayRail()
     view.set_tasks(scan_folder(str(dated)))
     assert all(task.due is not None for task in view._tasks)
     assert "کار کاری" not in {t.text for t in view._tasks}
@@ -134,54 +134,72 @@ def test_undated_tasks_never_reach_the_calendar(qapp, dated):
 
 
 def test_selecting_a_day_fills_the_panel(qapp, dated):
-    view = MonthView()
+    view = TodayRail()
     view.set_tasks(scan_folder(str(dated)))
-    view.select_day(date.today())
-    assert "فاکتور مروارید" in view._list.texts()
+    view.show_day(date.today())
+    assert "فاکتور مروارید" in view.list.texts()
     view.deleteLater()
 
 
 def test_a_day_with_nothing_on_it_says_so(qapp, dated):
-    view = MonthView()
+    view = TodayRail()
     view.set_tasks(scan_folder(str(dated)))
-    view.select_day(date.today() + timedelta(days=5))
-    assert view._list.texts() == ["کاری برای این روز نیست"]
+    view.show_day(date.today() + timedelta(days=5))
+    assert view.list.texts() == ["برای این روز کاری نیست"]
     view.deleteLater()
 
 
 def test_typing_a_task_reports_the_day_and_the_text(qapp, dated):
-    view = MonthView()
+    view = TodayRail()
     view.set_tasks(scan_folder(str(dated)))
     chosen = date.today() + timedelta(days=1)
-    view.select_day(chosen)
+    view.show_day(chosen)
     seen = []
     view.task_added.connect(lambda day, text: seen.append((day, text)))
-    view._input.setText("کار تازه")
+    view.input.setText("کار تازه")
     view._submit()
     assert seen == [(chosen, "کار تازه")]
     # The field clears, or the next task starts with the last one's text.
-    assert view._input.text() == ""
+    assert view.input.text() == ""
     view.deleteLater()
 
 
 def test_an_empty_line_adds_nothing(qapp, dated):
-    view = MonthView()
+    view = TodayRail()
     seen = []
     view.task_added.connect(lambda day, text: seen.append(text))
-    view._input.setText("   ")
+    view.input.setText("   ")
     view._submit()
     assert seen == []
     view.deleteLater()
 
 
 def test_moving_months_keeps_the_tasks(qapp, dated):
-    view = MonthView()
+    view = TodayRail()
     view.set_tasks(scan_folder(str(dated)))
     before = len(view._tasks)
-    view.shift(1)
-    view.shift(-1)
+    view.calendar.shift(1)
+    view.calendar.shift(-1)
     assert len(view._tasks) == before
     assert view.tasks_on(date.today())
+    view.deleteLater()
+
+
+def test_a_day_carrying_work_is_marked_on_the_month(qapp, dated):
+    view = TodayRail()
+    view.set_tasks(scan_folder(str(dated)))
+    assert date.today() in view.calendar._marked
+    assert date.today() + timedelta(days=1) not in view.calendar._marked
+    view.deleteLater()
+
+
+def test_returning_to_today_is_offered_only_when_you_have_left_it(qapp, dated):
+    view = TodayRail()
+    view.set_tasks(scan_folder(str(dated)))
+    view.show_day(date.today())
+    assert not view.today_button.isVisible() or view.selected_day() == date.today()
+    view.show_day(date.today() + timedelta(days=3))
+    assert view.selected_day() != date.today()
     view.deleteLater()
 
 
@@ -196,9 +214,9 @@ def test_the_widget_shows_only_today(qapp, dated):
 
 def test_the_widget_counts_what_is_done(qapp, notes):
     today = date.today()
-    daily_notes.add_task(notes, today, "یک")
-    daily_notes.add_task(notes, today, "دو")
-    path = daily_notes.path_for(notes, today)
+    task_file.add_task(notes, today, "یک")
+    task_file.add_task(notes, today, "دو")
+    path = task_file.path_for(notes)
     path.write_text(
         path.read_text(encoding="utf-8").replace("- [ ] یک", "- [x] یک", 1),
         encoding="utf-8",
@@ -238,7 +256,7 @@ def test_ticking_a_box_on_the_widget_reports_the_line(qapp, dated):
 # previous run, so it would have crashed every time until settings were
 # cleared by hand.
 
-@pytest.mark.parametrize("page", ["notes", "calendar", "editor"])
+@pytest.mark.parametrize("page", ["home", "editor"])
 def test_the_window_can_open_on_any_page(qapp, tmp_path, monkeypatch, page):
     from core import settings_manager
     from ui.main_window import MainWindow
@@ -276,3 +294,9 @@ def test_an_unknown_saved_page_is_survivable(qapp, tmp_path, monkeypatch):
     window._really_quitting = True
     window.close()
     window.deleteLater()
+
+
+def test_the_tasks_file_is_not_also_a_card(qapp, dated):
+    """It owns the rail; a card repeating it beside the rail is noise."""
+    titles = [card.title for card in load_library(dated)]
+    assert "کارها" not in titles

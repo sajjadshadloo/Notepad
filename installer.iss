@@ -2,7 +2,7 @@
 ; Build:  ISCC.exe installer.iss   (after PyInstaller has produced dist\NotepadPlus\)
 
 #define MyAppName "Notepad Plus"
-#define MyAppVersion "4.1.3"
+#define MyAppVersion "4.2.0"
 #define MyAppPublisher "Sajjad"
 #define MyAppExeName "NotepadPlus.exe"
 

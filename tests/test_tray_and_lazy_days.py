@@ -3,13 +3,12 @@
 * Closing the window hides it to the tray instead of ending the process.
 * Opening a day writes nothing until there is something to write.
 """
-from datetime import date
 from pathlib import Path
 
 import pytest
 from PyQt6.QtGui import QCloseEvent
 
-from core import daily_notes, settings_manager
+from core import settings_manager, task_file
 from ui.main_window import MainWindow, _app_icon
 from ui.tray import Tray
 
@@ -48,65 +47,63 @@ def _shut_down(win):
     win.deleteLater()
 
 
-# Day notes
+# The tasks file
+#
+# 4.1 opened a note per day; 4.2 opens the one file every dated task lives
+# in. Neither writes anything until you save — that was the 4.0 fix for a
+# folder filling with empty files, and it still holds.
 
-def test_opening_a_day_writes_nothing_to_disk(window, tmp_path):
+def test_opening_the_tasks_file_writes_nothing_to_disk(window):
     root = Path(window._cfg["notes_root"])
-    window.open_daily_note(date(2026, 8, 27))
-    assert not daily_notes.path_for(root, date(2026, 8, 27)).exists()
-    assert not (root / daily_notes.FOLDER).exists() or not list(
-        (root / daily_notes.FOLDER).glob("*.md")
-    )
+    window.open_tasks_file()
+    assert not task_file.path_for(root).exists()
+    assert not (root / task_file.LEGACY_FOLDER).exists()
 
 
-def test_the_day_opens_as_a_tab_named_after_its_file(window):
-    window.open_daily_note(date(2026, 8, 27))
+def test_it_opens_as_a_tab_named_after_the_file(window):
+    window.open_tasks_file()
     tab = window.current_document()
     assert tab.path is None
-    assert tab.pending_path.endswith("1405-06-05.md")
-    assert tab.display_name == "1405-06-05.md"
+    assert tab.pending_path.endswith(task_file.FILE_NAME)
+    assert tab.display_name == task_file.FILE_NAME
 
 
-def test_the_day_opens_prefilled_with_its_heading(window):
-    window.open_daily_note(date(2026, 8, 27))
-    assert window.current_document().text == daily_notes.starter_text(
-        date(2026, 8, 27)
-    )
+def test_it_opens_empty_rather_than_prefilled(window):
+    """No date heading: that is exactly what 4.2 took out."""
+    window.open_tasks_file()
+    assert window.current_document().text == ""
 
 
-def test_visiting_the_same_day_twice_reuses_the_tab(window):
-    window.open_daily_note(date(2026, 8, 27))
+def test_opening_it_twice_reuses_the_tab(window):
+    window.open_tasks_file()
     before = window.tabs.count()
-    window.open_daily_note(date(2026, 8, 27))
+    window.open_tasks_file()
     assert window.tabs.count() == before
 
 
-def test_saving_the_day_needs_no_dialog_and_lands_on_its_path(window, monkeypatch):
+def test_saving_needs_no_dialog_and_lands_on_its_path(window, monkeypatch):
     """The filename is already decided, so Ctrl+S must not ask for one."""
     monkeypatch.setattr(
         window, "save_current_as", lambda: pytest.fail("should not be asked")
     )
-    window.open_daily_note(date(2026, 8, 27))
+    window.open_tasks_file()
     tab = window.current_document()
-    tab.editor.insertPlainText("تماس با مشتری")
+    tab.editor.insertPlainText("- [ ] تماس با مشتری")
 
     assert window.save_current()
-    assert Path(tab.path) == daily_notes.path_for(
-        window._cfg["notes_root"], date(2026, 8, 27)
-    )
+    assert Path(tab.path) == task_file.path_for(window._cfg["notes_root"])
     assert "تماس با مشتری" in Path(tab.path).read_text(encoding="utf-8")
 
 
-def test_a_day_that_already_has_a_file_opens_that_file(window):
+def test_an_existing_tasks_file_is_opened_rather_than_replaced(window):
     root = window._cfg["notes_root"]
-    path = daily_notes.path_for(root, date(2026, 8, 27))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("# قبلا نوشته شده\n", encoding="utf-8")
+    path = task_file.path_for(root)
+    path.write_text("- [ ] کار قدیمی @۱۴۰۵/۰۶/۰۱" + chr(10), encoding="utf-8")
 
-    window.open_daily_note(date(2026, 8, 27))
+    window.open_tasks_file()
     tab = window.current_document()
     assert tab.path == str(path.resolve())
-    assert "قبلا نوشته شده" in tab.text
+    assert "کار قدیمی" in tab.text
 
 
 # Tray
@@ -168,41 +165,53 @@ def test_quitting_deliberately_accepts_the_close(trayed):
     assert event.isAccepted()
 
 
-def test_the_empty_day_cleanup_runs_once(window):
-    root = window._cfg["notes_root"]
-    path = daily_notes.path_for(root, date(2026, 8, 27))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(daily_notes.starter_text(date(2026, 8, 27)), encoding="utf-8")
+def test_the_daily_folder_is_folded_in_once(window):
+    """A 4.1 folder of day notes becomes rows in the one tasks file."""
+    root = Path(window._cfg["notes_root"])
+    folder = root / task_file.LEGACY_FOLDER
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "1405-06-05.md").write_text(
+        "# ۵ شهریور" + chr(10) * 2 + "- [ ] کار قدیمی" + chr(10), encoding="utf-8"
+    )
 
     window._cfg["daily_cleanup_done"] = False
-    window._prune_empty_daily_notes()
-    assert not path.exists()
+    window._import_legacy_daily_notes()
+
+    assert "کار قدیمی" in task_file.path_for(root).read_text(encoding="utf-8")
+    assert not folder.exists()
     assert window._cfg["daily_cleanup_done"]
 
-    # A second empty note is left alone: the tidy-up was a one-time repair.
-    path.write_text("", encoding="utf-8")
-    window._prune_empty_daily_notes()
-    assert path.exists()
+
+def test_the_fold_in_does_not_run_a_second_time(window):
+    root = Path(window._cfg["notes_root"])
+    window._cfg["daily_cleanup_done"] = False
+    window._import_legacy_daily_notes()
+
+    folder = root / task_file.LEGACY_FOLDER
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "1405-06-05.md").write_text("- [ ] بعدی" + chr(10), encoding="utf-8")
+    window._import_legacy_daily_notes()
+    assert (folder / "1405-06-05.md").exists()
 
 
-def test_a_day_note_replaces_the_blank_starting_tab(window):
+def test_the_tasks_file_replaces_the_blank_starting_tab(window):
     """It used to open beside the empty "Untitled" the app starts with."""
     assert [
         window.tabs.tabText(i) for i in range(window.tabs.count())
     ] == ["Untitled"]
 
-    window.open_daily_note(date(2026, 8, 27))
+    window.open_tasks_file()
 
     assert [
         window.tabs.tabText(i) for i in range(window.tabs.count())
-    ] == ["1405-06-05.md"]
+    ] == [task_file.FILE_NAME]
 
 
-def test_a_day_note_does_not_displace_a_tab_you_were_using(window):
+def test_it_does_not_displace_a_tab_you_were_using(window):
     """Only an untouched blank tab is a placeholder."""
     window.current_document().editor.insertPlainText("چیزی که نوشته‌ام")
-    window.open_daily_note(date(2026, 8, 27))
+    window.open_tasks_file()
 
     names = [window.tabs.tabText(i) for i in range(window.tabs.count())]
-    assert "1405-06-05.md" in names
+    assert task_file.FILE_NAME in names
     assert len(names) == 2

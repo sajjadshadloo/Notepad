@@ -526,6 +526,32 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
    paints the window colour and nothing draws a frame around it. */
 /* The desktop panel. Its surface is painted in ui/day_widget.py because a
    translucent window ignores a stylesheet background; only the text here. */
+/* The rail: today's work beside the notes, always on screen. */
+#todayRail {{
+    background: {t['surface']};
+    border-left: 1px solid {t['border']};
+}}
+#railHeading {{
+    color: {t['text']};
+    font-size: 16px;
+    font-weight: 700;
+}}
+#railProgress {{
+    color: {t['muted']};
+    font-size: 11px;
+}}
+#railTodayButton {{
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    color: {t['muted']};
+    padding: 3px 8px;
+    font-size: 11px;
+}}
+#railTodayButton:hover {{
+    background: {t['hover']};
+    color: {t['text']};
+}}
 #dayWidgetHeading {{
     color: {t['text']};
     font-size: 14px;
@@ -642,6 +668,11 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
 #calendarDay:hover {{ background: {t['hover']}; }}
 #calendarDay[holiday="true"] {{ color: {t['danger']}; }}
 #calendarDay[written="true"] {{ color: {t['accent']}; }}
+#calendarDay[chosen="true"] {{
+    background: {t['accent']};
+    color: {t['on_accent']};
+    font-weight: 700;
+}}
 #calendarDay[today="true"] {{
     border-color: {t['accent']};
     color: {t['accent']};

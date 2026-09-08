@@ -21,6 +21,11 @@ PATHS = {
         '<rect x="1.5" y="2.5" width="13" height="11" rx="2"></rect>'
         '<line x1="6" y1="2.5" x2="6" y2="13.5"></line>'
     ),
+    "widget": (
+        '<rect x="1.5" y="2.5" width="13" height="11" rx="2"></rect>'
+        '<line x1="4" y1="6" x2="11" y2="6"></line>'
+        '<line x1="4" y1="9" x2="9" y2="9"></line>'
+    ),
     "close": (
         '<line x1="4" y1="4" x2="12" y2="12"></line>'
         '<line x1="12" y1="4" x2="4" y2="12"></line>'
