@@ -85,7 +85,7 @@ log = logging.getLogger(__name__)
 TAB_DOT_SIZE = 6
 
 APP_TITLE = "Notepad Plus"
-APP_VERSION = "4.2.2"
+APP_VERSION = "4.2.3"
 
 # Line endings, as characters rather than an escape.
 NEWLINE_CHARS = chr(13) + chr(10)
@@ -498,6 +498,11 @@ class MainWindow(QMainWindow):
         self.open_action = self._action("&Open…", self.open_dialog, "Ctrl+O")
         self.quick_open_action = self._action(
             "&Go to File…", self.show_quick_open, "Ctrl+P"
+        )
+        # The top bar's field carries a "Ctrl K" badge, so that has to open
+        # it too — the badge was advertising a key nothing was bound to.
+        self.quick_open_action.setShortcuts(
+            [QKeySequence("Ctrl+P"), QKeySequence("Ctrl+K")]
         )
         self.today_action = self._action("My &Tasks…", self.show_today, "Ctrl+T")
         self.daily_note_action = self._action(

@@ -153,3 +153,13 @@ def test_the_close_button_closes_the_tab_it_belongs_to(window, qapp):
     button = window.document_tab_bar.tabButton(1, QTabBar.ButtonPosition.RightSide)
     button.click()
     assert closed == [1]
+
+
+def test_the_search_badge_names_a_key_that_works(window):
+    """The field shows "Ctrl K"; that has to actually open it."""
+    from PyQt6.QtGui import QKeySequence
+
+    assert window.top_bar.search_hint.text() == "Ctrl K"
+    keys = {s.toString() for s in window.quick_open_action.shortcuts()}
+    assert QKeySequence("Ctrl+K").toString() in keys
+    assert QKeySequence("Ctrl+P").toString() in keys

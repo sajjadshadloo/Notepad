@@ -8,7 +8,7 @@ SECTIONS = [
         [
             ("Ctrl+N", "New document"),
             ("Ctrl+O", "Open file"),
-            ("Ctrl+P", "Go to file — search notes by name"),
+            ("Ctrl+P / Ctrl+K", "Go to file, task or command"),
             ("Ctrl+Shift+W", "Show the day widget on the desktop"),
             ("Ctrl+T", "My tasks — everything with a date"),
             ("Ctrl+Shift+D", "Open the tasks file"),
@@ -58,7 +58,6 @@ SECTIONS = [
             ("Ctrl+= / Ctrl+-", "Zoom in / out"),
             ("Ctrl+0", "Restore default zoom"),
             ("Ctrl+Mouse Wheel", "Zoom"),
-            ("Ctrl+Shift+B", "Toggle sidebar"),
         ],
     ),
 ]
