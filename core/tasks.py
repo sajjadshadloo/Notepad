@@ -50,11 +50,20 @@ class Task:
     def overdue(self) -> bool:
         """Past its moment and still open.
 
+        A task with a date but no time owns the whole day: it is late only
+        once that day is over. Stamps carry no time since 4.1, and the 9am
+        the parser fills in is for ordering — reading it as a deadline
+        turned every task you wrote this morning red by lunchtime.
+
         A repeating task is judged on its next occurrence, so last week's
         instance does not leave it permanently red.
         """
         due = self.next_due()
-        return bool(due and not self.done and due < datetime.now())
+        if due is None or self.done:
+            return False
+        if not self.has_time:
+            return due.date() < date.today()
+        return due < datetime.now()
 
     def next_due(self, now: datetime | None = None) -> datetime | None:
         """The moment this task is next wanted.
@@ -78,14 +87,18 @@ class Task:
 
 
 def group_of(task: Task, now: datetime) -> str:
-    """Which bucket a task belongs in — shared by every task surface."""
+    """Which bucket a task belongs in — shared by every task surface.
+
+    Today's work stays in "امروز" all day. Only a task carrying an explicit
+    time can be late while its own day is still running.
+    """
     due = task.next_due(now)
     if due is None:
         return "بدون تاریخ"
+    if due.date() == now.date():
+        return "امروز" if not task.has_time or due >= now else "عقب‌افتاده"
     if due < now:
         return "عقب‌افتاده"
-    if due.date() == now.date():
-        return "امروز"
     if (due.date() - now.date()).days == 1:
         return "فردا"
     return "بعداً"

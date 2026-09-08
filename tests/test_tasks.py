@@ -1,6 +1,12 @@
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
-from core.tasks import due_within, parse_document, parse_task, sort_for_today
+from core.tasks import (
+    due_within,
+    group_of,
+    parse_document,
+    parse_task,
+    sort_for_today,
+)
 
 
 def test_plain_checkbox_has_no_deadline():
@@ -75,3 +81,61 @@ def test_today_view_puts_overdue_first_then_undated_last():
     )
     order = [t.text for t in sort_for_today(tasks, datetime(2026, 8, 25, 12, 0))]
     assert order == ["overdue", "today", "later", "undated"]
+
+
+# A date without a time owns the whole day
+#
+# Stamps carry no time since 4.1, and the parser fills in 9am so tasks sort
+# sensibly within a day. Reading that 9am as a deadline turned everything
+# written in the morning red by lunchtime — including a task added today.
+
+def _stamped(day, suffix=""):
+    from core.jalali import format_date
+
+    return parse_task(
+        "- [ ] کار @" + format_date(day, persian_digits=False) + suffix
+    )
+
+
+def test_todays_task_is_not_late_while_today_is_still_running():
+    task = _stamped(date.today())
+    assert not task.overdue
+    assert group_of(task, datetime.now()) == "امروز"
+
+
+def test_yesterdays_task_is_late():
+    task = _stamped(date.today() - timedelta(days=1))
+    assert task.overdue
+    assert group_of(task, datetime.now()) == "عقب‌افتاده"
+
+
+def test_tomorrows_task_is_not_late():
+    task = _stamped(date.today() + timedelta(days=1))
+    assert not task.overdue
+    assert group_of(task, datetime.now()) == "فردا"
+
+
+def test_an_explicit_time_that_has_passed_is_still_late():
+    """Notes written by 3.x carry times; those keep meaning what they meant."""
+    task = _stamped(date.today(), " 00:01")
+    assert task.has_time
+    assert task.overdue
+
+
+def test_an_explicit_time_still_ahead_is_not_late():
+    task = _stamped(date.today(), " 23:59")
+    assert task.has_time
+    assert not task.overdue
+
+
+def test_a_finished_task_is_never_late():
+    from core.jalali import format_date
+
+    when = format_date(date.today() - timedelta(days=3), persian_digits=False)
+    assert not parse_task("- [x] کار @" + when).overdue
+
+
+def test_the_hour_is_still_used_for_ordering_within_a_day():
+    """Dropping it from the deadline must not drop it from the sort."""
+    task = _stamped(date.today())
+    assert task.due.hour == 9
