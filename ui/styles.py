@@ -668,14 +668,17 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
 #calendarDay:hover {{ background: {t['hover']}; }}
 #calendarDay[holiday="true"] {{ color: {t['danger']}; }}
 #calendarDay[written="true"] {{ color: {t['accent']}; }}
+#calendarDay[today="true"] {{
+    border-color: {t['accent']};
+    color: {t['accent']};
+}}
+/* Last on purpose. These rules all have the same specificity, so the one
+   written last wins — and with [chosen] above [today], today's own cell got
+   the accent *colour* on top of the accent *fill* and its number vanished. */
 #calendarDay[chosen="true"] {{
     background: {t['accent']};
     color: {t['on_accent']};
     font-weight: 700;
-}}
-#calendarDay[today="true"] {{
-    border-color: {t['accent']};
-    color: {t['accent']};
 }}
 
 /* The @ button's scheduling popup. */

@@ -10,7 +10,13 @@ carrying its own stylesheet is exactly where the old sidebar rows went wrong.
 """
 from PyQt6.QtCore import QRect, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
-from PyQt6.QtWidgets import QListWidget, QListWidgetItem, QStyle, QStyledItemDelegate
+from PyQt6.QtWidgets import (
+    QListWidget,
+    QListWidgetItem,
+    QMenu,
+    QStyle,
+    QStyledItemDelegate,
+)
 
 from core.jalali import to_persian_digits
 from core.rtl_detector import detect_direction
@@ -185,6 +191,7 @@ class NoteCardGrid(QListWidget):
     """A wrapping grid of note cards."""
 
     note_activated = pyqtSignal(str)
+    note_delete_requested = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -203,6 +210,8 @@ class NoteCardGrid(QListWidget):
         self.setItemDelegate(NoteCardDelegate(self))
         self.itemActivated.connect(self._activate)
         self.itemClicked.connect(self._activate)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_menu)
 
     def show_cards(self, cards):
         self.clear()
@@ -219,3 +228,18 @@ class NoteCardGrid(QListWidget):
         card = item.data(ROLE_CARD)
         if card is not None:
             self.note_activated.emit(card.path)
+
+    def _show_menu(self, position):
+        item = self.itemAt(position)
+        card = item.data(ROLE_CARD) if item is not None else None
+        if card is None:
+            return
+        menu = QMenu(self)
+        open_action = menu.addAction("باز کردن")
+        menu.addSeparator()
+        delete_action = menu.addAction("حذف یادداشت")
+        chosen = menu.exec(self.viewport().mapToGlobal(position))
+        if chosen is open_action:
+            self.note_activated.emit(card.path)
+        elif chosen is delete_action:
+            self.note_delete_requested.emit(card.path)

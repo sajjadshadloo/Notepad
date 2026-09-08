@@ -1,17 +1,18 @@
-"""A small always-visible panel: today's date and today's work.
+"""A small panel that lives on the desktop: today's date and today's work.
 
-Not parented to the desktop. Windows only lets a window sit *behind* icons by
-attaching it to the WorkerW shell window, which is undocumented, breaks every
-time Explorer restarts or the wallpaper changes, and takes the panel with it.
-A frameless always-on-top panel snapped to a screen corner gives the same
-thing — glanceable without switching windows — and survives.
+Not parented to the desktop itself. Windows only lets a window sit *behind*
+icons by attaching it to the WorkerW shell window, which is undocumented,
+breaks every time Explorer restarts or the wallpaper changes, and takes the
+panel with it. A frameless window pinned to the *bottom* of the z-order gets
+the same effect and survives: visible whenever the desktop is, never over
+the window you are working in.
 
 It is deliberately small and does one job: show the day, and let a task be
 ticked without opening the app.
 """
 from datetime import date
 
-from PyQt6.QtCore import QPoint, Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QPoint, QRect, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen
 from PyQt6.QtWidgets import (
     QHBoxLayout,
@@ -38,18 +39,26 @@ class DayWidget(QWidget):
     """The desktop panel. Its content is a view; the files stay the truth."""
 
     task_toggled = pyqtSignal(str, int, bool)
+    task_delete_requested = pyqtSignal(str, int)
     task_opened = pyqtSignal(str, int)
     open_requested = pyqtSignal()
     closed = pyqtSignal()
+    # Where the panel was dragged to, so it can be put back there.
+    moved = pyqtSignal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("dayWidget")
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        # On the desktop, not over the work. Staying on *top* meant it sat
+        # above whatever you were doing all day, which is its own kind of
+        # interruption — the thing 4.0 removed reminders for. On the bottom
+        # of the z-order it is there whenever the desktop is, and never in
+        # front of anything else.
         self.setWindowFlags(
             Qt.WindowType.Tool
             | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.WindowStaysOnBottomHint
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.resize(WIDTH, HEIGHT)
@@ -63,6 +72,7 @@ class DayWidget(QWidget):
 
         self.list = TaskList()
         self.list.task_toggled.connect(self.task_toggled)
+        self.list.task_delete_requested.connect(self.task_delete_requested)
         self.list.itemActivated.connect(self._open)
         column.addWidget(self.list, 1)
 
@@ -94,6 +104,7 @@ class DayWidget(QWidget):
         row.addWidget(self.heading, 1)
         row.addWidget(open_button)
         row.addWidget(close_button)
+        self.heading.installEventFilter(self)
         return row
 
     # Content
@@ -137,12 +148,45 @@ class DayWidget(QWidget):
 
     # Placement
 
-    def snap_to_corner(self, screen):
-        """Bottom-left of the work area, clear of the notification tray."""
-        area = screen.availableGeometry()
-        self.move(area.left() + MARGIN, area.bottom() - self.height() - MARGIN)
+    def place(self, screen, remembered=None):
+        """Put the panel where it was left, or in a free corner.
 
-    # A frameless window has no title bar to drag, so the panel is the handle.
+        The default is the bottom *right*. 4.2.0 parked it bottom-left,
+        which on a Windows desktop is exactly where the icons are.
+        """
+        area = screen.availableGeometry()
+        if remembered:
+            point = QPoint(int(remembered[0]), int(remembered[1]))
+            # Only if it still lands on a screen — monitors get unplugged.
+            if area.contains(QRect(point, self.size()).center()):
+                self.move(point)
+                return
+        self.move(
+            area.right() - self.width() - MARGIN,
+            area.bottom() - self.height() - MARGIN,
+        )
+
+    # A frameless window has no title bar, so the header is the handle. The
+    # panel's own mouse events only fire on bare background — the list and
+    # the labels swallow theirs — which left almost nothing to grab, so the
+    # heading watches for the drag on the panel's behalf.
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.Type.MouseButtonPress:
+            if event.button() == Qt.MouseButton.LeftButton:
+                self._drag_from = (
+                    event.globalPosition().toPoint()
+                    - self.frameGeometry().topLeft()
+                )
+        elif event.type() == QEvent.Type.MouseMove and self._drag_from is not None:
+            if event.buttons() & Qt.MouseButton.LeftButton:
+                self.move(event.globalPosition().toPoint() - self._drag_from)
+                return True
+        elif event.type() == QEvent.Type.MouseButtonRelease:
+            if self._drag_from is not None:
+                self._drag_from = None
+                self.moved.emit(self.pos())
+        return super().eventFilter(watched, event)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -155,7 +199,9 @@ class DayWidget(QWidget):
             self.move(event.globalPosition().toPoint() - self._drag_from)
 
     def mouseReleaseEvent(self, event):
-        self._drag_from = None
+        if self._drag_from is not None:
+            self._drag_from = None
+            self.moved.emit(self.pos())
 
     def paintEvent(self, event):
         """Drawn rather than styled: a translucent window gets no stylesheet

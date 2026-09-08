@@ -23,6 +23,7 @@ ALL_LABEL = "همه"
 
 class NotesBoard(QWidget):
     note_activated = pyqtSignal(str)
+    note_delete_requested = pyqtSignal(str)
     new_note_requested = pyqtSignal()
 
     def __init__(self, root: str, parent=None):
@@ -41,6 +42,7 @@ class NotesBoard(QWidget):
 
         self.grid = NoteCardGrid()
         self.grid.note_activated.connect(self.note_activated)
+        self.grid.note_delete_requested.connect(self.note_delete_requested)
         column.addWidget(self.grid, 1)
 
         self._empty = QLabel("هنوز یادداشتی اینجا نیست")

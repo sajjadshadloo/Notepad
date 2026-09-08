@@ -40,7 +40,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from core import task_file
+from core import task_file, trash
 import core.note_index as note_index
 import core.settings_manager as settings_manager
 from core.external_change_monitor import ExternalChangeMonitor
@@ -85,7 +85,7 @@ log = logging.getLogger(__name__)
 TAB_DOT_SIZE = 6
 
 APP_TITLE = "Notepad Plus"
-APP_VERSION = "4.2.0"
+APP_VERSION = "4.2.1"
 
 # Line endings, as characters rather than an escape.
 NEWLINE_CHARS = chr(13) + chr(10)
@@ -838,11 +838,13 @@ class MainWindow(QMainWindow):
 
         self.notes_board = NotesBoard(self._cfg["notes_root"])
         self.notes_board.note_activated.connect(self.open_note_from_board)
+        self.notes_board.note_delete_requested.connect(self.delete_note)
         self.notes_board.new_note_requested.connect(self.new_note_from_board)
 
         self.rail = TodayRail()
         self.rail.task_added.connect(self._add_day_task)
         self.rail.task_toggled.connect(self.set_task_done)
+        self.rail.task_delete_requested.connect(self.delete_task)
         self.rail.task_opened.connect(self.open_task_in_editor)
         self.rail.file_requested.connect(self.open_tasks_file)
 
@@ -2114,17 +2116,25 @@ class MainWindow(QMainWindow):
         if self._day_widget is None:
             self._day_widget = DayWidget()
             self._day_widget.task_toggled.connect(self.set_task_done)
+            self._day_widget.task_delete_requested.connect(self.delete_task)
             self._day_widget.task_opened.connect(self._open_task_from_widget)
             self._day_widget.open_requested.connect(self._reveal_window)
             self._day_widget.closed.connect(
                 lambda: self.toggle_day_widget(False)
             )
-            self._day_widget.snap_to_corner(self.screen())
+            self._day_widget.moved.connect(self._remember_widget_position)
+            self._day_widget.place(
+                self.screen(), self._cfg.get("day_widget_position")
+            )
         self._day_widget.show()
         self._start_task_watcher()
         self.refresh_day_widget()
         if self._tasks_watcher is not None:
             self._tasks_watcher.check_now()
+
+    def _remember_widget_position(self, point):
+        self._cfg["day_widget_position"] = [point.x(), point.y()]
+        settings_manager.save(self._cfg)
 
     def refresh_day_widget(self):
         if self._day_widget is not None and self._tasks_watcher is not None:
@@ -2351,6 +2361,123 @@ class MainWindow(QMainWindow):
             self._reload_document_from_disk(tab)
         self.notes_board.reload()
         self._notify_tasks_changed()
+        return True
+
+    def delete_task(self, path: str, line_number: int):
+        """Remove one task's line from its file, after asking.
+
+        The line goes for good — unlike a note, there is no Recycle Bin for
+        part of a file — so the text is shown in the question rather than a
+        bare "are you sure".
+        """
+        line = self._task_line(path, line_number)
+        if line is None:
+            return
+        task = parse_task(line)
+        label = task.text if task else line.strip()
+        if (
+            QMessageBox.question(
+                self,
+                "حذف کار",
+                'این کار حذف شود؟' + chr(10) + chr(10) + label,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+        if self._remove_line(path, line_number):
+            self.statusBar().showMessage("کار حذف شد", 2500)
+            self._notify_tasks_changed()
+            self.refresh_tasks()
+
+    def _task_line(self, path: str, line_number: int) -> str | None:
+        tab = self._tab_for_path(path)
+        if tab is not None:
+            block = tab.editor.document().findBlockByNumber(line_number)
+            return block.text() if block.isValid() else None
+        try:
+            lines = read_text_file(path).text.splitlines()
+        except (OSError, UnicodeError):
+            return None
+        return lines[line_number] if line_number < len(lines) else None
+
+    def _remove_line(self, path: str, line_number: int) -> bool:
+        """Drop one whole line, through the document when the file is open."""
+        tab = self._tab_for_path(path)
+        if tab is not None:
+            block = tab.editor.document().findBlockByNumber(line_number)
+            if not block.isValid():
+                return False
+            cursor = QTextCursor(block)
+            cursor.beginEditBlock()
+            cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+            cursor.removeSelectedText()
+            # BlockUnderCursor leaves the newline behind on the first block.
+            if block.blockNumber() == 0:
+                cursor.deleteChar()
+            cursor.endEditBlock()
+            return True
+        try:
+            loaded = read_text_file(path)
+            lines = loaded.text.splitlines(keepends=True)
+            if line_number >= len(lines):
+                return False
+            del lines[line_number]
+            write_text_file_atomic(path, "".join(lines), loaded.encoding)
+        except (OSError, UnicodeError):
+            log.warning("Could not delete line %s of %s", line_number, path, exc_info=True)
+            return False
+        return True
+
+    def delete_note(self, path: str):
+        """Send a note to the Recycle Bin, after asking.
+
+        The Bin rather than an unlink: a note is the user's writing and a
+        wrong click has to be recoverable. Where there is no Bin, the
+        question says so instead of quietly deleting.
+        """
+        name = Path(path).name
+        recoverable = trash.available()
+        question = (
+            'یادداشت «' + name + '» حذف شود؟'
+            + chr(10) + chr(10)
+            + ("به سطل بازیافت می‌رود." if recoverable else "بازگرداندنش ممکن نیست.")
+        )
+        if (
+            QMessageBox.question(
+                self,
+                "حذف یادداشت",
+                question,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+
+        tab = self._tab_for_path(path)
+        if tab is not None:
+            index = self.tabs.indexOf(tab)
+            if index >= 0:
+                tab.mark_clean()
+                self.close_tab(index)
+        self._file_monitor.unwatch(path)
+
+        if not (trash.send_to_recycle_bin(path) or self._unlink(path)):
+            QMessageBox.critical(self, "حذف نشد", "این یادداشت حذف نشد.")
+            return
+        self.notes_board.reload()
+        self._notify_tasks_changed()
+        self.statusBar().showMessage("یادداشت حذف شد", 2500)
+
+    @staticmethod
+    def _unlink(path: str) -> bool:
+        try:
+            Path(path).unlink()
+        except OSError:
+            log.warning("Could not delete %s", path, exc_info=True)
+            return False
         return True
 
     def _notify_tasks_changed(self):

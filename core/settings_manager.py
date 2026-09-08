@@ -60,6 +60,8 @@ DEFAULTS = {
     "page": "home",
     # The small desktop panel showing today. Off until asked for.
     "day_widget": False,
+    # Where the panel was dragged to. Empty means the default corner.
+    "day_widget_position": [],
 }
 
 DIRECTION_MODES = ("rtl", "ltr", "auto")

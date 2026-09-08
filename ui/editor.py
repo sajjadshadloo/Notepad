@@ -1,5 +1,6 @@
 from PyQt6.QtCore import QPoint, QPointF, QRect, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (
+    QFontMetrics,
     QColor,
     QFont,
     QPainter,
@@ -15,7 +16,7 @@ from core.list_editing import (
     outdent_list_line,
     parse_list_item,
 )
-from core.jalali import to_persian_digits
+from core.jalali import format_pill, to_persian_digits
 from core.rtl_detector import detect_direction
 from core.tasks import parse_task, stamp_span
 from ui.styles import current_palette
@@ -48,6 +49,7 @@ CHECKBOX_HIT_PADDING = 3
 # How far the date capsule is grown around the stamp's own glyphs. Kept
 # small: the only room it has is the space before the "@".
 STAMP_PAD_X = 4
+STAMP_TEXT_SCALE = 0.88
 STAMP_PAD_Y = 1
 
 
@@ -719,7 +721,7 @@ class SmartEditor(QTextEdit):
         return QRect(left, top, right - left, height)
 
     def _visible_stamps(self):
-        """Yield (rect, overdue) for the date capsules inside the viewport.
+        """Yield (rect, label, overdue, done) for the date badges on screen.
 
         Cached exactly like the list markers, and for the same reason: the
         geometry only moves when the text, the scroll position or the font
@@ -752,6 +754,9 @@ class SmartEditor(QTextEdit):
                                     STAMP_PAD_X,
                                     STAMP_PAD_Y,
                                 ),
+                                format_pill(task.due.date())
+                                if task and task.due
+                                else "",
                                 bool(task and task.overdue),
                                 bool(task and task.done),
                             )
@@ -809,9 +814,16 @@ class SmartEditor(QTextEdit):
         theme = current_palette()
         accent = QColor(theme["accent"])
 
-        # The date capsule: an outline behind the stamp's own text, so the
-        # deadline reads as a badge without the file gaining any markup.
-        for stamp_rect, overdue, done in self._visible_stamps():
+        # The date badge. The stamp's own characters are painted invisible
+        # by the highlighter and this is drawn over the space they reserve,
+        # so "@1405/06/05 17:13" reads as "امروز" while the file keeps the
+        # plain text it always had.
+        badge_font = QFont(self.font())
+        badge_font.setPointSizeF(
+            max(7.0, self.font().pointSizeF() * STAMP_TEXT_SCALE)
+        )
+        badge_metrics = QFontMetrics(badge_font)
+        for stamp_rect, label, overdue, done in self._visible_stamps():
             if not stamp_rect.intersects(event.rect()):
                 continue
             if done:
@@ -819,11 +831,35 @@ class SmartEditor(QTextEdit):
             elif overdue:
                 colour = QColor(theme["danger"])
             else:
-                colour = QColor(theme["border"])
+                colour = QColor(theme["accent"])
+
+            # Sized to the label, not to the hidden stamp. "@۱۴۰۵/۰۶/۱۷" is
+            # far wider than "امروز", and a pill drawn to the hidden run's
+            # width spilled over the words beside it.
+            pill = stamp_rect
+            if label:
+                wanted = badge_metrics.horizontalAdvance(label) + 2 * STAMP_PAD_X
+                if wanted < pill.width():
+                    pill = QRect(
+                        pill.center().x() - wanted // 2,
+                        pill.top(),
+                        wanted,
+                        pill.height(),
+                    )
             painter.setPen(QPen(colour, 1.0))
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            radius = stamp_rect.height() / 2
-            painter.drawRoundedRect(stamp_rect, radius, radius)
+            radius = pill.height() / 2
+            painter.drawRoundedRect(pill, radius, radius)
+            if label:
+                painter.setFont(badge_font)
+                painter.drawText(
+                    pill,
+                    int(
+                        Qt.AlignmentFlag.AlignCenter
+                        | Qt.AlignmentFlag.AlignVCenter
+                    ),
+                    label,
+                )
 
         for block, item, marker_rect in self._visible_list_markers():
             if not marker_rect.intersects(event.rect()):

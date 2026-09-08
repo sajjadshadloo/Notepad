@@ -32,6 +32,7 @@ RAIL_WIDTH = 306
 class TodayRail(QWidget):
     task_added = pyqtSignal(object, str)          # (date, text)
     task_toggled = pyqtSignal(str, int, bool)     # (path, line, done)
+    task_delete_requested = pyqtSignal(str, int)  # (path, line)
     task_opened = pyqtSignal(str, int)            # (path, line)
     file_requested = pyqtSignal()                 # open کارها.md in the editor
 
@@ -59,6 +60,7 @@ class TodayRail(QWidget):
 
         self.list = TaskList()
         self.list.task_toggled.connect(self.task_toggled)
+        self.list.task_delete_requested.connect(self.task_delete_requested)
         self.list.itemActivated.connect(self._open)
         column.addWidget(self.list, 1)
 

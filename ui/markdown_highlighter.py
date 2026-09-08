@@ -15,6 +15,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QFont, QSyntaxHighlighter, QTextCharFormat
 
 from core.formatting import BULLET_RE, HEADING_RE, NUMBERED_RE, TODO_RE
+from core.tasks import stamp_span
 from ui.styles import current_palette
 
 HEADING_SCALE = {1: 1.5, 2: 1.3, 3: 1.15, 4: 1.08, 5: 1.04, 6: 1.0}
@@ -80,6 +81,10 @@ class MarkdownHighlighter(QSyntaxHighlighter):
                 done.setForeground(QColor(colors["muted"]))
                 done.setFontStrikeOut(True)
                 self.setFormat(todo.end(), len(text) - todo.end(), done)
+            # After the strikethrough, not before: that run covers the rest
+            # of the line, stamp included, and would paint the characters
+            # back into view on a finished task.
+            self._hide_stamp(text)
             self._apply_inline_bold(text, colors)
             return
 
@@ -102,6 +107,21 @@ class MarkdownHighlighter(QSyntaxHighlighter):
             self.setFormat(start, numbered.end() - start, fmt)
 
         self._apply_inline_bold(text, colors)
+
+    def _hide_stamp(self, text: str):
+        """Make the raw "@1405/06/05" invisible; the editor paints a badge.
+
+        Same idea as the heading markers and the checkbox token: the file
+        keeps its plain text, and the screen shows something a person reads.
+        The characters are left at full size rather than shrunk, because the
+        badge is drawn over the space they reserve.
+        """
+        span = stamp_span(text)
+        if span is None:
+            return
+        hidden = QTextCharFormat()
+        hidden.setForeground(QColor(0, 0, 0, 0))
+        self.setFormat(span[0], span[1] - span[0], hidden)
 
     def _apply_inline_bold(self, text: str, colors: dict):
         """Render ``**bold**`` spans, keeping whatever format is already set

@@ -300,3 +300,61 @@ def test_the_tasks_file_is_not_also_a_card(qapp, dated):
     """It owns the rail; a card repeating it beside the rail is noise."""
     titles = [card.title for card in load_library(dated)]
     assert "کارها" not in titles
+
+
+# The desktop panel's manners
+#
+# 4.2.0 pinned it on top of every window and parked it bottom-left, which on
+# Windows is where the desktop icons are. Both were wrong for something meant
+# to sit quietly on the desktop.
+
+def test_the_widget_stays_behind_other_windows(qapp):
+    from PyQt6.QtCore import Qt
+
+    widget = DayWidget()
+    flags = widget.windowFlags()
+    assert flags & Qt.WindowType.WindowStaysOnBottomHint
+    assert not (flags & Qt.WindowType.WindowStaysOnTopHint)
+    widget.deleteLater()
+
+
+def test_it_defaults_to_the_corner_the_icons_are_not_in(qapp):
+    widget = DayWidget()
+    screen = qapp.primaryScreen()
+    widget.place(screen)
+    area = screen.availableGeometry()
+    assert widget.x() > area.center().x(), "should be on the right, not over the icons"
+    widget.deleteLater()
+
+
+def test_a_remembered_position_is_used(qapp):
+    widget = DayWidget()
+    screen = qapp.primaryScreen()
+    area = screen.availableGeometry()
+    wanted = (area.left() + 120, area.top() + 90)
+    widget.place(screen, wanted)
+    assert (widget.x(), widget.y()) == wanted
+    widget.deleteLater()
+
+
+def test_a_position_off_every_screen_falls_back_to_the_corner(qapp):
+    """Monitors get unplugged; the panel must not vanish with them."""
+    widget = DayWidget()
+    screen = qapp.primaryScreen()
+    widget.place(screen, (-9000, -9000))
+    area = screen.availableGeometry()
+    assert area.contains(widget.pos())
+    widget.deleteLater()
+
+
+def test_dragging_it_reports_where_it_landed(qapp):
+    from PyQt6.QtCore import QPoint
+
+    widget = DayWidget()
+    seen = []
+    widget.moved.connect(seen.append)
+    widget._drag_from = QPoint(0, 0)
+    widget.move(300, 200)
+    widget.mouseReleaseEvent(None)
+    assert seen and (seen[0].x(), seen[0].y()) == (300, 200)
+    widget.deleteLater()

@@ -98,22 +98,99 @@ def test_a_left_to_right_line_gets_a_capsule_too(editor, qapp):
 
 def test_an_overdue_task_is_flagged_for_the_danger_colour(editor, qapp):
     editor.setPlainText("- [ ] کار @1400/01/01 09:00\n")
-    _rect, overdue, done = _capsules(editor, qapp)[0]
+    _rect, _label, overdue, done = _capsules(editor, qapp)[0]
     assert overdue and not done
 
 
 def test_a_finished_task_is_flagged_as_done(editor, qapp):
     editor.setPlainText("- [x] کار @1400/01/01 09:00\n")
-    _rect, overdue, done = _capsules(editor, qapp)[0]
+    _rect, _label, overdue, done = _capsules(editor, qapp)[0]
     assert done and not overdue
 
 
 def test_a_future_task_is_neither(editor, qapp):
     editor.setPlainText("- [ ] کار @1499/01/01 09:00\n")
-    _rect, overdue, done = _capsules(editor, qapp)[0]
+    _rect, _label, overdue, done = _capsules(editor, qapp)[0]
     assert not overdue and not done
 
 
 def test_lines_without_stamps_cost_nothing(editor, qapp):
     editor.setPlainText("سلام\n- [ ] بدون تاریخ\n## سرفصل\n")
     assert _capsules(editor, qapp) == []
+
+
+# The badge replaces the stamp's own text
+#
+# "@۱۴۰۵/۰۶/۰۵ ۱۷:۱۳" is markup showing through. The characters are painted
+# invisible and this is drawn over the space they reserve, so the file keeps
+# its plain-text stamp and the screen shows a date a person reads.
+
+def test_the_badge_reads_as_a_date_not_as_a_stamp(editor, qapp):
+    from datetime import date
+
+    from core.jalali import format_date
+
+    today = date.today()
+    editor.setPlainText("- [ ] کار @" + format_date(today, persian_digits=False) + "\n")
+    _rect, label, _overdue, _done = _capsules(editor, qapp)[0]
+    assert label == "امروز"
+    assert "@" not in label
+
+
+def test_tomorrow_and_yesterday_get_their_own_words(editor, qapp):
+    from datetime import date, timedelta
+
+    from core.jalali import format_date
+
+    for delta, expected in ((1, "فردا"), (-1, "دیروز")):
+        when = date.today() + timedelta(days=delta)
+        editor.setPlainText(
+            "- [ ] کار @" + format_date(when, persian_digits=False) + "\n"
+        )
+        _rect, label, _o, _d = _capsules(editor, qapp)[0]
+        assert label == expected
+
+
+def test_a_distant_date_is_named_by_its_day_and_month(editor, qapp):
+    editor.setPlainText("- [ ] کار @1405/06/05\n")
+    _rect, label, _o, _d = _capsules(editor, qapp)[0]
+    assert "شهریور" in label
+    assert "@" not in label and "/" not in label
+
+
+def test_the_file_still_holds_the_plain_stamp(editor, qapp):
+    """Nothing is rewritten — only the rendering changes."""
+    editor.setPlainText("- [ ] کار @1405/06/05 17:13\n")
+    _capsules(editor, qapp)
+    assert editor.toPlainText() == "- [ ] کار @1405/06/05 17:13\n"
+
+
+def test_the_stamp_characters_are_painted_invisible(qapp):
+    """Otherwise the badge would be drawn on top of the raw text.
+
+    Its own editor, because the hiding is the highlighter's job and the
+    shared fixture attaches none. Read off the block layout, not the cursor:
+    a highlighter's formats are extra ranges on the layout and never reach
+    charFormat().
+    """
+    from core.tasks import stamp_span
+    from ui.editor import SmartEditor
+    from ui.markdown_highlighter import MarkdownHighlighter
+
+    widget = SmartEditor()
+    widget.markdown_highlighter = MarkdownHighlighter(widget)
+    widget.setPlainText("- [ ] کار @1405/06/05\n")
+    widget._refresh_layout()
+    qapp.processEvents()
+
+    block = widget.document().firstBlock()
+    start, end = stamp_span(block.text())
+    covered = [
+        run
+        for run in block.layout().formats()
+        if run.format.foreground().color().alpha() == 0
+        and run.start <= start
+        and run.start + run.length >= end
+    ]
+    widget.deleteLater()
+    assert covered, "the stamp is still drawn in its own ink"

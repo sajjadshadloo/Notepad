@@ -75,3 +75,17 @@ def test_navigating_months_keeps_the_grid_valid(tmp_path, qapp):
     assert len(panel._cells) == month_length(panel._year, panel._month)
     panel.shift(-1)
     assert (panel._year, panel._month) == start
+
+
+def test_the_chosen_rule_comes_after_today(qapp):
+    """Same specificity, so the later rule wins.
+
+    With [chosen] written above [today], today's own cell got the accent
+    colour on top of the accent fill and its number disappeared.
+    """
+    from ui.styles import build_stylesheet
+
+    sheet = build_stylesheet("dark", "graphite")
+    assert sheet.index('#calendarDay[chosen="true"]') > sheet.index(
+        '#calendarDay[today="true"]'
+    )

@@ -151,3 +151,26 @@ def format_long(value: date) -> str:
     """5 شهریور 1405 — for headings and the calendar view."""
     jy, jm, jd = from_gregorian(value)
     return to_persian_digits(f"{jd} {MONTHS[jm - 1]} {jy}")
+
+def format_pill(value: date) -> str:
+    """The short form a date badge shows: "امروز", "فردا", or "۵ شهریور".
+
+    The editor hides the raw "@1405/06/05" and draws this instead, so the
+    file keeps its plain-text stamp and the screen shows a date a person
+    reads. The year is added only when it is not the current one.
+    """
+    today = date.today()
+    delta = (value - today).days
+    if delta == 0:
+        return "امروز"
+    if delta == 1:
+        return "فردا"
+    if delta == -1:
+        return "دیروز"
+    year, month, day = from_gregorian(value)
+    this_year, _, _ = from_gregorian(today)
+    text = f"{day} {MONTHS[month - 1]}"
+    if year != this_year:
+        text += f" {year}"
+    return to_persian_digits(text)
+

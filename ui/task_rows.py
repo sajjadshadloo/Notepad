@@ -12,7 +12,12 @@ So the rows are painted here, and both task surfaces share it.
 """
 from PyQt6.QtCore import QRect, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen
-from PyQt6.QtWidgets import QListWidget, QListWidgetItem, QStyledItemDelegate
+from PyQt6.QtWidgets import (
+    QListWidget,
+    QListWidgetItem,
+    QMenu,
+    QStyledItemDelegate,
+)
 
 from core.jalali import format_date, to_persian_digits
 from core.tasks import REPEAT_MARK
@@ -229,6 +234,8 @@ class TaskList(QListWidget):
 
     # (path, line_number, done) — the box was clicked and wants that state.
     task_toggled = pyqtSignal(str, int, bool)
+    # (path, line_number) — remove this task's line from its file.
+    task_delete_requested = pyqtSignal(str, int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -240,6 +247,8 @@ class TaskList(QListWidget):
         self.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setItemDelegate(TaskRowDelegate(self))
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_menu)
 
     def add_header(self, label: str, count: str = "", urgent: bool = False):
         item = QListWidgetItem()
@@ -278,6 +287,25 @@ class TaskList(QListWidget):
 
     def payload_of(self, item) -> tuple | None:
         return item.data(ROLE_PAYLOAD) if item is not None else None
+
+    def _show_menu(self, position):
+        item = self.itemAt(position)
+        if item is None or item.data(ROLE_KIND) != KIND_TASK:
+            return
+        payload = self.payload_of(item)
+        if not payload:
+            return
+        fields = item.data(ROLE_FIELDS) or {}
+        menu = QMenu(self)
+        done = bool(fields.get("done"))
+        toggle = menu.addAction("برگرداندن به انجام‌نشده" if done else "انجام شد")
+        menu.addSeparator()
+        remove = menu.addAction("حذف کار")
+        chosen = menu.exec(self.viewport().mapToGlobal(position))
+        if chosen is toggle:
+            self.task_toggled.emit(payload[0], payload[1], not done)
+        elif chosen is remove:
+            self.task_delete_requested.emit(payload[0], payload[1])
 
     def box_rect(self, item) -> QRect:
         """Where this row's checkbox is drawn, in viewport coordinates.
