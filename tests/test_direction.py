@@ -135,36 +135,6 @@ def test_deleting_across_paragraphs_keeps_directions_correct(qapp):
     assert _layouts(editor) == [LTR, RTL]
 
 
-def test_opening_a_fence_reflows_paragraphs_outside_the_edit(qapp):
-    """Typing ``` turns following prose into code, which forces it LTR even
-    though the edit itself never touched those paragraphs."""
-    editor = SmartEditor()
-    editor.setPlainText("سلام\nسلام\nسلام")
-    qapp.processEvents()
-    assert _layouts(editor) == [RTL, RTL, RTL]
-
-    cursor = editor.textCursor()
-    cursor.setPosition(0)
-    cursor.insertText("```\n")
-    editor._refresh_layout()
-
-    assert editor.line_is_code(2)
-    assert _layouts(editor) == [LTR, LTR, LTR, LTR]
-
-
-def test_code_background_is_limited_to_the_viewport(qapp):
-    """The tint is paint-only, so it is built for visible lines alone."""
-    editor = SmartEditor()
-    editor.resize(600, 200)
-    editor.show()
-    editor.setPlainText("```python\n" + "x = 1\n" * 400 + "```")
-    qapp.processEvents()
-    editor._update_code_backgrounds()
-
-    assert len(editor._code_line_set) > 200
-    assert 0 < len(editor.extraSelections()) < 60
-
-
 def test_empty_document_starts_rtl(qapp):
     editor = SmartEditor()
     editor.setPlainText("")
@@ -210,17 +180,6 @@ def test_direction_shortcuts(qapp):
     assert SmartEditor.direction_for_shift_scancode(99) is None
 
 
-def test_code_blocks_are_ltr_in_auto_mode(qapp):
-    editor = SmartEditor()
-    editor.setPlainText("```\nprint('hello')\n```")
-    qapp.processEvents()
-
-    block = editor.document().begin()
-    while block.isValid():
-        assert block.blockFormat().layoutDirection() == Qt.LayoutDirection.LeftToRight
-        block = block.next()
-
-
 def test_default_mode_keeps_the_whole_document_right_to_left(qapp):
     """The point of the RTL default: an English line inside a Persian note
     must not flip the document's alignment mid-page."""
@@ -230,20 +189,6 @@ def test_default_mode_keeps_the_whole_document_right_to_left(qapp):
     qapp.processEvents()
 
     assert _layouts(editor) == [RTL, RTL, RTL, RTL]
-
-
-def test_forced_direction_still_leaves_code_left_to_right(qapp):
-    """Right-to-left code is unreadable, so code blocks are the one exception
-    to a document-wide direction."""
-    editor = SmartEditor()
-    editor.set_direction_mode("rtl")
-    editor.setPlainText("توضیح\n```python\nx = compute(1)\n```\nپایان")
-    qapp.processEvents()
-
-    directions = _layouts(editor)
-    assert directions[0] == RTL
-    assert directions[-1] == RTL
-    assert all(d == LTR for d in directions[1:-1]), directions
 
 
 def test_switching_to_ltr_moves_every_paragraph(qapp):

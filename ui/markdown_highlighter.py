@@ -1,9 +1,13 @@
 """Live, lightweight styling for Markdown structure.
 
 Headings get larger and bold while their ``#`` markers are visually hidden;
-``**bold**`` spans render bold with hidden asterisks; list markers are
-painted by SmartEditor; and lines inside a ``` fence switch to a monospace
-face. The document text itself is never modified — only its rendering.
+``**bold**`` spans render bold with hidden asterisks; and list markers are
+painted by SmartEditor. The document text itself is never modified — only
+its rendering.
+
+4.1.2 dropped fenced code blocks. They were the one construct the editor
+showed raw — three lines of ``` around whatever you wrote — and a note full
+of Persian tasks has no use for them.
 """
 import re
 
@@ -15,12 +19,6 @@ from ui.styles import current_palette
 
 HEADING_SCALE = {1: 1.5, 2: 1.3, 3: 1.15, 4: 1.08, 5: 1.04, 6: 1.0}
 HIDDEN_MARKER_SIZE = 1.0
-
-# Monospace chain for code lines. This is applied here rather than through an
-# ExtraSelection because the font changes line metrics: it has to reach every
-# code line in the document, not only the ones currently on screen, or text
-# would reflow as you scroll. The editor tints the visible ones separately.
-CODE_FONT_FAMILIES = ["Cascadia Mono", "Consolas", "Courier New"]
 
 # ``**bold**`` — no space right after the opening or before the closing
 # marker, matching how Markdown itself parses strong emphasis.
@@ -35,11 +33,6 @@ class MarkdownHighlighter(QSyntaxHighlighter):
         return current_palette()
 
     def highlightBlock(self, text: str):
-        block_number = self.currentBlock().blockNumber()
-        if self._editor.line_is_code(block_number):
-            self._highlight_code(text)
-            return
-
         colors = self._palette()
         base_size = self._editor.font().pointSizeF()
         marker_direction = (
@@ -124,14 +117,3 @@ class MarkdownHighlighter(QSyntaxHighlighter):
                 marker.setForeground(QColor(0, 0, 0, 0))
                 marker.setFontPointSize(HIDDEN_MARKER_SIZE)
                 self.setFormat(marker_start, 2, marker)
-
-    def _highlight_code(self, text: str):
-        """Code lines get the monospace face — no token colouring.
-
-        The multi-language tokeniser it replaced cost ~50 regex scans per
-        block on every layout pass, and a note is not an IDE.
-        """
-        mono = QTextCharFormat()
-        mono.setFontFamilies(CODE_FONT_FAMILIES)
-        mono.setFontFixedPitch(True)
-        self.setFormat(0, len(text), mono)

@@ -351,9 +351,15 @@ QTabBar::tab:selected {{
     color: {t['text']};
     border-color: {t['border']};
 }}
-QTabBar::close-button {{
-    subcontrol-position: right;
+/* The close control is our own QToolButton (see DocumentTabBar.tabInserted),
+   because Qt's default is the platform's red cross and it reads as an error
+   badge inside the tab. */
+#tabCloseButton {{
+    border: none;
+    border-radius: 5px;
+    background: transparent;
 }}
+#tabCloseButton:hover {{ background: {t['hover']}; }}
 #newTabButton {{
     color: {t['muted']};
     font-size: 16px;

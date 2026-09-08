@@ -114,12 +114,6 @@ def test_a_future_task_is_neither(editor, qapp):
     assert not overdue and not done
 
 
-def test_a_stamp_inside_a_code_fence_is_left_alone(editor, qapp):
-    editor.setPlainText("```\n- [ ] کار @1405/06/05 10:00\n```\n")
-    editor._refresh_layout()
-    assert _capsules(editor, qapp) == []
-
-
 def test_lines_without_stamps_cost_nothing(editor, qapp):
     editor.setPlainText("سلام\n- [ ] بدون تاریخ\n## سرفصل\n")
     assert _capsules(editor, qapp) == []

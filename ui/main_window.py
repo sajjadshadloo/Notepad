@@ -46,7 +46,7 @@ import core.settings_manager as settings_manager
 from core.external_change_monitor import ExternalChangeMonitor
 from core.jalali import to_persian_digits
 from core.tasks import parse_document, parse_task
-from core.tasks import set_stamp, shift_stamp, toggle_repeat
+from core.tasks import set_stamp, shift_stamp
 from core.formatting import (
     toggle_bold,
     toggle_bullet,
@@ -85,7 +85,7 @@ log = logging.getLogger(__name__)
 TAB_DOT_SIZE = 6
 
 APP_TITLE = "Notepad Plus"
-APP_VERSION = "4.1.1"
+APP_VERSION = "4.1.2"
 
 # Line endings, as characters rather than an escape.
 NEWLINE_CHARS = chr(13) + chr(10)
@@ -117,6 +117,46 @@ class DocumentTabBar(QTabBar):
     # The + is placed by the tab strip's layout (see DocumentTabs), not
     # positioned by hand over the bar: computing its x from tabRect() put it
     # on top of the last tab's close button whenever the bar had not settled.
+
+    def tabInserted(self, index: int):
+        """Give the new tab our own close button.
+
+        Qt's default is the platform style's close pixmap, which on Windows
+        is a red cross that reads as an error badge sitting in the tab. This
+        is the same stroke icon the rest of the chrome uses.
+        """
+        super().tabInserted(index)
+        button = QToolButton(self)
+        button.setObjectName("tabCloseButton")
+        button.setAutoRaise(True)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setToolTip("Close tab  (Ctrl+W)")
+        button.setFixedSize(18, 18)
+        button.setIconSize(QSize(9, 9))
+        button.setIcon(icon("close", current_palette()["muted"], 9))
+        button.clicked.connect(
+            lambda _checked=False, b=button: self._close_from(b)
+        )
+        self.setTabButton(index, QTabBar.ButtonPosition.RightSide, button)
+
+    def _close_from(self, button):
+        """Which tab a close button belongs to, asked at click time.
+
+        Not captured when the button is made: tabs are movable, so an index
+        taken then goes stale the moment one is dragged.
+        """
+        for index in range(self.count()):
+            if self.tabButton(index, QTabBar.ButtonPosition.RightSide) is button:
+                self.tabCloseRequested.emit(index)
+                return
+
+    def refresh_close_icons(self):
+        """After a palette change, the icons are still the old colour."""
+        colour = current_palette()["muted"]
+        for index in range(self.count()):
+            button = self.tabButton(index, QTabBar.ButtonPosition.RightSide)
+            if button is not None:
+                button.setIcon(icon("close", colour, 9))
 
 
 def _app_icon() -> QIcon:
@@ -557,14 +597,6 @@ class MainWindow(QMainWindow):
         self.stamp_action = self._action(
             "Set &Date…", self.show_stamp_picker, "Ctrl+Shift+A"
         )
-        self.repeat_action = self._action(
-            "Repeat &Weekly",
-            lambda: self._transform_selected_lines(toggle_repeat),
-            "Ctrl+Shift+R",
-        )
-        self.fence_action = self._action(
-            "Code &Fence", self.wrap_in_code_fence, "Ctrl+Shift+C"
-        )
         self.font_action = self._action("&Font…", self.show_settings)
 
         # View
@@ -715,9 +747,6 @@ class MainWindow(QMainWindow):
         format_menu.addAction(self.todo_action)
         format_menu.addAction(self.toggle_done_action)
         format_menu.addAction(self.stamp_action)
-        format_menu.addAction(self.repeat_action)
-        format_menu.addSeparator()
-        format_menu.addAction(self.fence_action)
         format_menu.addSeparator()
         format_menu.addAction(self.font_action)
 
@@ -746,8 +775,11 @@ class MainWindow(QMainWindow):
         bold.setToolTip("Bold  (Ctrl+B)")
         bar.addAction(bold)
         bar.addSeparator()
-        for level, action in enumerate(self.heading_actions, start=1):
-            proxy = self._action(f"H{level}", action.trigger)
+        # Two of the three levels: a title and a section is what a note
+        # actually uses. Ctrl+3 still works, and so does the menu entry the
+        # command palette reads.
+        for level in (1, 2):
+            proxy = self._action(f"H{level}", self.heading_actions[level - 1].trigger)
             proxy.setToolTip(f"Heading {level}  (Ctrl+{level})")
             bar.addAction(proxy)
         bar.addSeparator()
@@ -762,17 +794,11 @@ class MainWindow(QMainWindow):
         bar.addAction(todo)
         bar.addSeparator()
 
-        # The three that turn a checkbox into something with a deadline.
+        # What turns a checkbox into something with a day.
         stamp = self._action("@", self.stamp_action.trigger)
-        stamp.setToolTip("Schedule this task — pick a day and an hour")
+        stamp.setToolTip("تاریخ این کار  (Ctrl+Shift+A)")
         self._stamp_toolbar_action = stamp
-        repeat = self._action("↻", self.repeat_action.trigger)
-        repeat.setToolTip("Repeat this task weekly")
-        fence = self._action("</>", self.fence_action.trigger)
-        fence.setToolTip("Wrap the selection in a code fence")
         bar.addAction(stamp)
-        bar.addAction(repeat)
-        bar.addAction(fence)
 
         # Find sits at the far end, away from the formatting cluster.
         spacer = QWidget()
@@ -973,31 +999,6 @@ class MainWindow(QMainWindow):
                 anchor.mapToGlobal(anchor.rect().bottomLeft())
             )
         picker.exec()
-
-    def wrap_in_code_fence(self):
-        """Put ``` lines around the selection, or open an empty fence.
-
-        One edit block, so a single Ctrl+Z takes the whole thing back.
-        """
-        tab = self.current_document()
-        if not tab:
-            return
-        cursor = tab.editor.textCursor()
-        cursor.beginEditBlock()
-        if cursor.hasSelection():
-            start, end = cursor.selectionStart(), cursor.selectionEnd()
-            cursor.setPosition(end)
-            cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock)
-            cursor.insertText("\n```")
-            cursor.setPosition(start)
-            cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-            cursor.insertText("```\n")
-        else:
-            cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-            cursor.insertText("```\n\n```\n")
-            cursor.movePosition(QTextCursor.MoveOperation.Up, n=2)
-        cursor.endEditBlock()
-        tab.editor.setTextCursor(cursor)
 
     def _popup_status_menu(self, button, actions):
         menu = QMenu(self)
@@ -1865,9 +1866,9 @@ class MainWindow(QMainWindow):
     def _restyle(self):
         """Rebuild the stylesheet from the current theme and palette.
 
-        The editor paints code backgrounds and markers itself, so those have
-        to be recomputed here — a stylesheet swap alone leaves them on the
-        outgoing palette's colours.
+        The editor paints its markers itself, and so do the tab close
+        buttons, so those have to be recoloured here — a stylesheet swap
+        alone leaves them on the outgoing palette's colours.
         """
         QApplication.instance().setStyleSheet(
             build_stylesheet(
@@ -1880,9 +1881,9 @@ class MainWindow(QMainWindow):
         self._find_toolbar_action.setIcon(
             icon("search", current_palette()["muted"], 13)
         )
+        self.document_tab_bar.refresh_close_icons()
         for index in range(self.tabs.count()):
             tab = self.tabs.widget(index)
-            tab.editor.refresh_code_blocks()
             tab.highlighter.rehighlight()
             self.tabs.setTabIcon(index, self._dot_icon(tab.modified))
 

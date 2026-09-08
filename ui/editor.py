@@ -6,7 +6,6 @@ from PyQt6.QtGui import (
     QPen,
     QTextBlockFormat,
     QTextCursor,
-    QTextFormat,
 )
 from PyQt6.QtWidgets import QTextEdit, QWidget
 
@@ -52,30 +51,6 @@ STAMP_PAD_X = 4
 STAMP_PAD_Y = 1
 
 
-def fenced_code_lines(text: str) -> set[int]:
-    """Line numbers inside ``` fenced blocks, the fence rows included.
-
-    Only explicit fences count. Earlier versions also *guessed* at unfenced
-    code with a pile of regexes; that ran over the whole document on every
-    keystroke and, worse, misread ordinary Persian prose as code and forced
-    it left-to-right. If you want a block, mark it with ```.
-    """
-    lines = text.splitlines()
-    inside: set[int] = set()
-    start = None
-    for index, line in enumerate(lines):
-        if line.strip().startswith("```"):
-            if start is None:
-                start = index
-            else:
-                inside.update(range(start, index + 1))
-                start = None
-    if start is not None:
-        # An unclosed fence runs to the end of the document.
-        inside.update(range(start, len(lines)))
-    return inside
-
-
 class SmartEditor(QTextEdit):
     """Plain-text editor with line numbers and paragraph-level bidi direction."""
 
@@ -92,7 +67,6 @@ class SmartEditor(QTextEdit):
         self.setAcceptRichText(False)
         self.direction_mode = "auto"
         self._formatting = False
-        self._code_line_set: set[int] = set()
         self._line_numbers_visible = True
         self.markdown_highlighter = None
         self._hovered_checkbox_block: int | None = None
@@ -118,7 +92,6 @@ class SmartEditor(QTextEdit):
         self.horizontalScrollBar().valueChanged.connect(self._line_area.update)
         # The code background is a paint-only decoration, so it is rebuilt for
         # the visible lines alone and refreshed whenever the viewport moves.
-        self.verticalScrollBar().valueChanged.connect(self._update_code_backgrounds)
         self.textChanged.connect(self._schedule_refresh)
         self.textChanged.connect(self._line_area.update)
         self.cursorPositionChanged.connect(self._cursor_context_changed)
@@ -151,8 +124,6 @@ class SmartEditor(QTextEdit):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._invalidate_marker_cache()
-        # A taller viewport can expose code lines that had no tint yet.
-        self._update_code_backgrounds()
         content = self.contentsRect()
         width = self.line_number_area_width()
         self._line_area.setGeometry(
@@ -239,17 +210,9 @@ class SmartEditor(QTextEdit):
 
     def _refresh_layout(self):
         """Single pass: scan code blocks once, then reuse for directions."""
-        # A change to which lines are code can flip the direction of a
-        # paragraph far away from the edit (typing ``` opens a fence over the
-        # rest of the file), so that case still needs the whole document.
-        code_changed = self.refresh_code_blocks()
-        self.apply_directions(only_dirty=not code_changed)
+        self.apply_directions(only_dirty=True)
 
-    def _direction_for_text(self, text: str, is_code: bool = False) -> str:
-        # Code is always LTR, even when the user forces the document RTL —
-        # right-to-left code is unreadable and breaks the block layout.
-        if is_code:
-            return "ltr"
+    def _direction_for_text(self, text: str) -> str:
         if self.direction_mode in {"rtl", "ltr"}:
             return self.direction_mode
         # Markdown markers are presentation, not content. In particular the
@@ -265,7 +228,6 @@ class SmartEditor(QTextEdit):
         numbered = (
             item is not None
             and item.kind == "numbered"
-            and not self.line_is_code(cursor.block().blockNumber())
         )
         expected_layout = (
             Qt.LayoutDirection.RightToLeft
@@ -326,9 +288,6 @@ class SmartEditor(QTextEdit):
 
         self._formatting = True
         was_modified = document.isModified()
-        # Reuse the line set computed by refresh_code_blocks rather than
-        # flattening the blocks again.
-        code_lines = self._code_line_set
         # One edit block so the whole pass is a single undo command, which
         # the undo/redo overrides below can then skip over transparently.
         changed = False
@@ -340,9 +299,7 @@ class SmartEditor(QTextEdit):
                 cursor = QTextCursor(block)
                 changed |= self._apply_block_direction(
                     cursor,
-                    self._direction_for_text(
-                        block.text(), block.blockNumber() in code_lines
-                    ),
+                    self._direction_for_text(block.text()),
                 )
                 block = block.next()
         finally:
@@ -405,67 +362,6 @@ class SmartEditor(QTextEdit):
     def current_direction(self) -> str:
         layout = self.textCursor().blockFormat().layoutDirection()
         return "rtl" if layout == Qt.LayoutDirection.RightToLeft else "ltr"
-
-    # Code detection
-
-    def line_is_code(self, line_number: int) -> bool:
-        return line_number in self._code_line_set
-
-    def refresh_code_blocks(self, text: str | None = None) -> bool:
-        """Rescan for ``` fenced blocks.
-
-        Returns whether the set of code lines changed — the caller uses that
-        to decide if paragraphs outside the edit need re-evaluating, since a
-        fence flips everything after it.
-        """
-        if text is None:
-            text = self.toPlainText()
-        new_code_lines = fenced_code_lines(text)
-        changed = new_code_lines != self._code_line_set
-        self._code_line_set = new_code_lines
-        self._update_code_backgrounds()
-        if changed and self.markdown_highlighter is not None:
-            was_formatting = self._formatting
-            self._formatting = True
-            try:
-                self.markdown_highlighter.rehighlight()
-            finally:
-                self._formatting = was_formatting
-        return changed
-
-    def _update_code_backgrounds(self):
-        """Tint the code lines currently on screen.
-
-        This is a paint-only decoration — the monospace font that actually
-        affects layout is applied per block by MarkdownHighlighter, so
-        restricting the tint to the viewport is safe and keeps the cost
-        proportional to the window rather than to the file.
-        """
-        if not self._code_line_set:
-            if self.extraSelections():
-                self.setExtraSelections([])
-            return
-
-        # From the palette, not a fixed pair: a hardcoded blue-grey stayed
-        # blue-grey under the warm and violet palettes.
-        background = QColor(current_palette()["surface_alt"])
-        viewport_bottom = self.viewport().height()
-        selections: list[QTextEdit.ExtraSelection] = []
-        block = self.cursorForPosition(QPoint(0, 0)).block()
-        while block.isValid():
-            if self.cursorRect(QTextCursor(block)).top() > viewport_bottom:
-                break
-            if block.isVisible() and block.blockNumber() in self._code_line_set:
-                selection = QTextEdit.ExtraSelection()
-                selection.cursor = QTextCursor(block)
-                selection.cursor.clearSelection()
-                selection.format.setProperty(
-                    QTextFormat.Property.FullWidthSelection, True
-                )
-                selection.format.setBackground(background)
-                selections.append(selection)
-            block = block.next()
-        self.setExtraSelections(selections)
 
     @classmethod
     def direction_for_shift_scancode(cls, scan_code: int) -> str | None:
@@ -547,7 +443,6 @@ class SmartEditor(QTextEdit):
         if (
             cursor.hasSelection()
             or cursor.block().text()
-            or self.line_is_code(cursor.blockNumber())
         ):
             return False
 
@@ -567,7 +462,7 @@ class SmartEditor(QTextEdit):
 
     def _continue_list(self) -> bool:
         cursor = self.textCursor()
-        if cursor.hasSelection() or self.line_is_code(cursor.blockNumber()):
+        if cursor.hasSelection():
             return False
         block = cursor.block()
         item = parse_list_item(block.text())
@@ -764,7 +659,7 @@ class SmartEditor(QTextEdit):
             top = self.cursorRect(QTextCursor(block)).top()
             if top > viewport_bottom:
                 break
-            if block.isVisible() and not self.line_is_code(block.blockNumber()):
+            if block.isVisible():
                 item = parse_list_item(block.text())
                 if item is not None:
                     markers.append((block, item, self._marker_rect(block, item)))
@@ -842,7 +737,7 @@ class SmartEditor(QTextEdit):
             top = self.cursorRect(QTextCursor(block)).top()
             if top > viewport_bottom:
                 break
-            if block.isVisible() and not self.line_is_code(block.blockNumber()):
+            if block.isVisible():
                 text = block.text()
                 span = stamp_span(text)
                 if span is not None:
@@ -1049,5 +944,4 @@ class SmartEditor(QTextEdit):
         # Loading a document replaces everything, so nothing carries over from
         # the previous content and the first pass must visit every paragraph.
         self._needs_full_pass = True
-        self.refresh_code_blocks(text)
         self.apply_directions()

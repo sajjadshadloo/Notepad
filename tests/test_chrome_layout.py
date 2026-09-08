@@ -104,3 +104,52 @@ def test_every_menu_command_is_reachable_from_the_palette(window):
     labels = {label for label, _hint, _run in window._palette_commands()}
     for name in ("Save", "Settings", "Go to File", "My Tasks"):
         assert any(name in label for label in labels), name
+
+
+# The format bar, after 4.1.2 trimmed it
+#
+# It had eleven controls. Bullet, number, checkbox and bold are the ones that
+# matter; H3, the weekly-repeat mark and the code fence were taking width
+# from them.
+
+def test_the_format_bar_holds_only_what_is_used(window):
+    labels = [a.text() for a in window.format_bar.actions() if a.text()]
+    assert labels == ["B", "H1", "H2", "•", "1.", "☑", "@", "Find"]
+
+
+def test_the_code_fence_and_weekly_repeat_are_gone(window):
+    assert not hasattr(window, "fence_action")
+    assert not hasattr(window, "repeat_action")
+    assert not hasattr(window, "wrap_in_code_fence")
+
+
+def test_the_third_heading_level_is_still_reachable(window):
+    """Off the bar, not out of the app — Ctrl+3 and the palette still have it."""
+    assert len(window.heading_actions) == 3
+    labels = {label for label, _hint, _run in window._palette_commands()}
+    assert any("Heading 3" in label for label in labels)
+
+
+def test_the_close_button_is_ours_not_the_platform_cross(window):
+    """Qt's default close pixmap is a red cross that reads as an error."""
+    from PyQt6.QtWidgets import QTabBar, QToolButton
+
+    bar = window.document_tab_bar
+    button = bar.tabButton(0, QTabBar.ButtonPosition.RightSide)
+    assert isinstance(button, QToolButton)
+    assert button.objectName() == "tabCloseButton"
+    assert not button.icon().isNull()
+
+
+def test_the_close_button_closes_the_tab_it_belongs_to(window, qapp):
+    """Tabs are movable, so the index cannot be captured when it is built."""
+    from PyQt6.QtWidgets import QTabBar
+
+    window.new_document()
+    qapp.processEvents()
+    assert window.tabs.count() == 2
+    closed = []
+    window.document_tab_bar.tabCloseRequested.connect(closed.append)
+    button = window.document_tab_bar.tabButton(1, QTabBar.ButtonPosition.RightSide)
+    button.click()
+    assert closed == [1]

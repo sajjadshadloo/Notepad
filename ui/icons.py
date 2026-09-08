@@ -21,6 +21,10 @@ PATHS = {
         '<rect x="1.5" y="2.5" width="13" height="11" rx="2"></rect>'
         '<line x1="6" y1="2.5" x2="6" y2="13.5"></line>'
     ),
+    "close": (
+        '<line x1="4" y1="4" x2="12" y2="12"></line>'
+        '<line x1="12" y1="4" x2="4" y2="12"></line>'
+    ),
     "search": (
         '<circle cx="7" cy="7" r="4.5"></circle>'
         '<line x1="10.5" y1="10.5" x2="14" y2="14"></line>'
