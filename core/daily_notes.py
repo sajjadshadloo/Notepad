@@ -11,6 +11,9 @@ from core.jalali import format_long, from_gregorian, to_gregorian
 
 FOLDER = "Daily"
 
+NEWLINE = chr(10)
+BLANK_LINE = NEWLINE * 2
+
 
 def path_for(root: str | Path, day: date) -> Path:
     jy, jm, jd = from_gregorian(day)
@@ -73,3 +76,42 @@ def existing_days(root: str | Path) -> set[str]:
     if not folder.exists():
         return set()
     return {p.stem for p in folder.glob("*.md")}
+
+def add_task(root: str | Path, day: date, text: str) -> Path:
+    """Write one dated task into a day's note, creating the note if needed.
+
+    This is what makes the Daily folder worth having. Until 4.1 a day note
+    was created by *visiting* a day, so the folder filled with empty files
+    and nothing ever put work in them. Now a file appears exactly when a task
+    is put on that day, and the calendar reads them back.
+    """
+    from core.file_service import read_text_file, write_text_file_atomic
+    from core.tasks import parse_task, set_stamp
+
+    path = path_for(root, day)
+    line = set_stamp("- [ ] " + text.strip(), day)
+
+    existing = ""
+    encoding = "utf-8"
+    if path.exists():
+        loaded = read_text_file(path)
+        existing, encoding = loaded.text, loaded.encoding
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        existing = starter_text(day)
+
+    body = existing.rstrip()
+    # starter_text ends with an empty checkbox, ready to type into. Filling it
+    # is the point; leaving it above the new line would be a blank task.
+    if body.endswith("- [ ]"):
+        body = body[: -len("- [ ]")].rstrip()
+    # Tasks stack directly under one another; only prose gets a blank
+    # line between it and the first task.
+    if not body:
+        joined = line
+    else:
+        last = body.splitlines()[-1]
+        gap = NEWLINE if parse_task(last) is not None else BLANK_LINE
+        joined = body + gap + line
+    write_text_file_atomic(path, joined + NEWLINE, encoding)
+    return path

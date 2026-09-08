@@ -1,14 +1,18 @@
-"""Scheduling a task from the @ button.
+"""Giving a task its date from the @ button.
 
-The button used to stamp today's date and say nothing about how to add a
-time — you had to know you could type one after it. These cover the two
-halves: what the picker hands back, and what that does to the line.
+3.11 added an hour to this; 4.1 took it back out, because nothing reads an
+hour any more. These cover the two halves: what the picker hands back, and
+what that does to the line.
+
+set_stamp still accepts an hour and parse_task still reads one: notes written
+by 3.x carry times, and those files have to keep meaning what they meant.
 """
 from datetime import date, time
 
 import pytest
 
 from core.tasks import parse_task, set_stamp
+from ui.stamp_picker import StampPicker
 
 
 # Writing the stamp
@@ -71,11 +75,6 @@ def picker(tmp_path, qapp):
     picker.deleteLater()
 
 
-def test_it_opens_with_no_time_chosen(picker):
-    """"Later today" is the common case; an hour is opt-in."""
-    assert picker._time is None
-
-
 def test_it_opens_on_today_when_the_line_has_no_date(picker):
     assert picker._date == date.today()
 
@@ -88,41 +87,28 @@ def test_it_opens_on_the_date_the_line_already_has(tmp_path, qapp):
     picker.deleteLater()
 
 
-def test_picking_a_preset_hour_selects_exactly_one_chip(picker):
-    picker._pick_hour(16, 0)
-    checked = [b.text() for values, b in picker._hour_buttons if b.isChecked()]
-    assert checked == ["16:00"]
-    assert picker._time == time(16, 0)
+# 4.1 removed the hour
 
-
-def test_a_custom_time_clears_the_presets(picker):
-    from PyQt6.QtCore import QTime
-
-    picker._pick_hour(16, 0)
-    picker.time_edit.setTime(QTime(7, 45))
-    assert picker._time == time(7, 45)
-    assert not any(b.isChecked() for _v, b in picker._hour_buttons)
-
-
-def test_confirming_without_a_time_reports_none(picker):
+def test_the_picker_emits_only_a_date(qapp, tmp_path):
+    """No hour is asked for, so the signal carries one value, not two."""
+    picker = StampPicker(str(tmp_path), date(2026, 8, 27))
     seen = []
-    picker.picked.connect(lambda day, at: seen.append((day, at)))
-    picker._accept_without_time()
-    assert seen == [(picker._date, None)]
+    picker.picked.connect(seen.append)
+    picker._accept()
+    assert seen == [date(2026, 8, 27)]
+    picker.deleteLater()
 
 
-def test_confirming_with_no_hour_chosen_falls_back_to_nine(picker):
-    """The button says "ثبت", so it has to mean something."""
-    seen = []
-    picker.picked.connect(lambda day, at: seen.append((day, at)))
-    picker._accept_with_time()
-    assert seen == [(picker._date, time(9, 0))]
+def test_no_hour_controls_remain(qapp, tmp_path):
+    picker = StampPicker(str(tmp_path), date(2026, 8, 27))
+    assert not hasattr(picker, "_hour_buttons")
+    assert not hasattr(picker, "time_edit")
+    picker.deleteLater()
 
 
-def test_every_preset_hour_fits_its_chip(picker):
-    """Five chips did not fit the popup and Qt elided 09:00 to nonsense."""
-    from PyQt6.QtGui import QFontMetrics
-
-    for _values, button in picker._hour_buttons:
-        needed = QFontMetrics(button.font()).horizontalAdvance(button.text())
-        assert button.sizeHint().width() >= needed
+def test_the_stamp_it_writes_carries_no_time():
+    line = set_stamp("- [ ] تماس با مشتری", date(2026, 8, 27))
+    task = parse_task(line)
+    assert task is not None
+    assert not task.has_time
+    assert ":" not in line

@@ -31,7 +31,7 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSizePolicy,
-    QSplitter,
+    QStackedWidget,
     QSystemTrayIcon,
     QTabBar,
     QToolBar,
@@ -74,7 +74,9 @@ from ui.today_view import TodayDialog
 from ui.settings_dialog import SettingsDialog
 from ui.stamp_picker import StampPicker
 from ui.shortcuts_dialog import ShortcutsDialog
-from ui.sidebar import Sidebar
+from ui.day_widget import DayWidget
+from ui.month_view import MonthView
+from ui.notes_board import NotesBoard
 from ui.styles import build_stylesheet, current_palette, resolve_theme
 
 log = logging.getLogger(__name__)
@@ -83,7 +85,10 @@ log = logging.getLogger(__name__)
 TAB_DOT_SIZE = 6
 
 APP_TITLE = "Notepad Plus"
-APP_VERSION = "4.0.0"
+APP_VERSION = "4.1.0"
+
+# Line endings, as characters rather than an escape.
+NEWLINE_CHARS = chr(13) + chr(10)
 FILE_FILTER = "Text Files (*.txt);;Markdown (*.md *.markdown);;All Files (*.*)"
 ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 
@@ -351,6 +356,11 @@ class FindReplaceDialog(QDialog):
 
 
 class MainWindow(QMainWindow):
+    # Raised whenever a task is written anywhere. Every surface that shows
+    # tasks listens, so the calendar, the day widget and the cards can never
+    # disagree about what is done.
+    tasks_changed = pyqtSignal()
+
     def __init__(self, initial_files: list[str] | None = None):
         super().__init__()
         self._cfg = settings_manager.load()
@@ -367,6 +377,7 @@ class MainWindow(QMainWindow):
         # the difference between that and actually leaving.
         self._really_quitting = False
         self._tray: Tray | None = None
+        self._day_widget: DayWidget | None = None
         # Tab status dots, keyed by colour; dropped when the palette changes.
         self._dot_icons: dict = {}
         self._zoom_steps = 0
@@ -407,6 +418,11 @@ class MainWindow(QMainWindow):
             opened = self.open_file(path) or opened
         if not opened:
             self.new_document()
+            # A file on the command line means the editor, whatever page the
+            # window was left on last time.
+            self.show_page(self._cfg.get("page", "notes"))
+        else:
+            self.show_page("editor")
 
         # Recovery and migration both raise modal prompts, and neither may run
         # from here: the window is not on screen yet, so the dialog gets no
@@ -535,7 +551,7 @@ class MainWindow(QMainWindow):
         # A task becomes a deadline by carrying a stamp, and a habit by
         # carrying the repeat mark after it. Both stay plain text.
         self.stamp_action = self._action(
-            "Schedule…", self.show_stamp_picker, "Ctrl+Shift+A"
+            "Set &Date…", self.show_stamp_picker, "Ctrl+Shift+A"
         )
         self.repeat_action = self._action(
             "Repeat &Weekly",
@@ -560,16 +576,10 @@ class MainWindow(QMainWindow):
         self.zoom_reset_action = self._action(
             "&Restore Default Zoom", self.reset_zoom, "Ctrl+0"
         )
-        # Ctrl+B now bolds text (the writing shortcut everyone expects);
-        # the sidebar moved to Ctrl+Shift+B.
-        self.sidebar_action = self._action(
-            "&Sidebar", self.toggle_sidebar, "Ctrl+Shift+B", checkable=True
+        self.day_widget_action = self._action(
+            "&Day Widget", self.toggle_day_widget, "Ctrl+Shift+W", checkable=True
         )
-        self.sidebar_action.setChecked(self._cfg.get("sidebar_visible", False))
-        self.sidebar_right_action = self._action(
-            "Sidebar on &Right", self.set_sidebar_on_right, checkable=True
-        )
-        self.sidebar_right_action.setChecked(self._cfg.get("sidebar_on_right", False))
+        self.day_widget_action.setChecked(self._cfg.get("day_widget", False))
         self.line_numbers_action = self._action(
             "&Line Numbers", self.toggle_line_numbers, checkable=True
         )
@@ -716,8 +726,7 @@ class MainWindow(QMainWindow):
         theme_menu.addActions(self.theme_group.actions())
         view_menu.addSeparator()
         view_menu.addAction(self.line_numbers_action)
-        view_menu.addAction(self.sidebar_action)
-        view_menu.addAction(self.sidebar_right_action)
+        view_menu.addAction(self.day_widget_action)
 
         help_menu = self.menuBar().addMenu("&Help")
         help_menu.addAction(self.shortcuts_action)
@@ -797,42 +806,45 @@ class MainWindow(QMainWindow):
             self._build_today_meter(), Qt.Corner.TopRightCorner
         )
 
-        self.sidebar = Sidebar(
-            self._cfg["notes_root"],
-            self._note_index,
-            font_families=settings_manager.font_chain(self._cfg),
-        )
-        self.sidebar.note_activated.connect(self._open_from_sidebar)
-        self.sidebar.day_activated.connect(self.open_daily_note)
-        self.sidebar.task_activated.connect(self._open_task)
-        self.sidebar.root_changed.connect(self._sidebar_root_changed)
-        self.sidebar.setVisible(self._cfg.get("sidebar_visible", False))
+        self.notes_board = NotesBoard(self._cfg["notes_root"])
+        self.notes_board.note_activated.connect(self.open_note_from_board)
+        self.notes_board.new_note_requested.connect(self.new_note_from_board)
 
-        self._splitter = QSplitter(Qt.Orientation.Horizontal)
-        self._splitter.addWidget(self.sidebar)
-        self._splitter.addWidget(self.tabs.pages)
-        self._apply_sidebar_side()
+        self.month_view = MonthView()
+        self.month_view.task_added.connect(self._add_day_task)
+        self.month_view.task_toggled.connect(self.set_task_done)
+        self.month_view.task_opened.connect(self.open_task_in_editor)
+        self.month_view.note_requested.connect(self.open_daily_note)
 
-        # The design's stacking order, top to bottom: the top bar, the tab
-        # strip, the format bar, then the sidebar and editor side by side.
-        # The format bar is a plain widget in this column rather than a
-        # QMainWindow toolbar, because a toolbar can only sit above the
-        # central widget — which would put it above the tabs.
+        # The editor keeps its tab strip and format bar; they belong to it and
+        # mean nothing on the other two pages, so they live on this page
+        # rather than in the window's own column.
+        editor_page = QWidget()
+        editor_column = QVBoxLayout(editor_page)
+        editor_column.setContentsMargins(0, 0, 0, 0)
+        editor_column.setSpacing(0)
+        editor_column.addWidget(self.tabs)
+        editor_column.addWidget(self.format_bar)
+        editor_column.addWidget(self.tabs.pages, 1)
+
+        self.pages = QStackedWidget()
+        self.pages.addWidget(self.notes_board)
+        self.pages.addWidget(self.month_view)
+        self.pages.addWidget(editor_page)
+
         self.top_bar = TopBar()
         self.top_bar.search_requested.connect(self.show_quick_open)
-        self.top_bar.sidebar_toggled.connect(self.sidebar_action.trigger)
         self.top_bar.tasks_requested.connect(self.show_today)
         self.top_bar.theme_toggled.connect(self.cycle_theme)
         self.top_bar.settings_requested.connect(self.show_settings)
+        self.top_bar.page_requested.connect(self.show_page)
 
         shell = QWidget()
         column = QVBoxLayout(shell)
         column.setContentsMargins(0, 0, 0, 0)
         column.setSpacing(0)
         column.addWidget(self.top_bar)
-        column.addWidget(self.tabs)
-        column.addWidget(self.format_bar)
-        column.addWidget(self._splitter, 1)
+        column.addWidget(self.pages, 1)
         self.setCentralWidget(shell)
 
         # Save state leads on the left, where the eye lands first — it is the
@@ -932,11 +944,7 @@ class MainWindow(QMainWindow):
         self.set_theme("dark" if resolved == "light" else "light")
 
     def show_stamp_picker(self):
-        """The @ button: pick a day and an hour for the task under the cursor.
-
-        Before this the button stamped today and said nothing about how to
-        add a time, which you could only do by knowing to type it.
-        """
+        """The @ button: pick the day the task under the cursor is due."""
         tab = self.current_document()
         if not tab:
             return
@@ -949,8 +957,8 @@ class MainWindow(QMainWindow):
 
         picker = StampPicker(self._cfg["notes_root"], existing, self)
         picker.picked.connect(
-            lambda day, at: self._transform_selected_lines(
-                lambda text: set_stamp(text, day, at)
+            lambda day: self._transform_selected_lines(
+                lambda text: set_stamp(text, day)
             )
         )
         # Under the @ button, so it reads as that button's own menu.
@@ -1264,7 +1272,7 @@ class MainWindow(QMainWindow):
         self._discard_placeholder(placeholder)
         self._add_recent(candidate)
         note_index.touch(self._note_index, candidate)
-        self.sidebar.refresh()
+        self.notes_board.reload()
         self.statusBar().showMessage(f"Opened {candidate}", 3000)
         return True
 
@@ -1337,7 +1345,7 @@ class MainWindow(QMainWindow):
         remove_recovery(tab.recovery_id)
         self._add_recent(tab.path)
         note_index.touch(self._note_index, tab.path)
-        self.sidebar.refresh()
+        self.notes_board.reload()
         self._document_state_changed(tab)
         self.statusBar().showMessage(f"Saved {tab.path}", 3000)
         return True
@@ -1570,18 +1578,6 @@ class MainWindow(QMainWindow):
         self.tabs.setTabIcon(index, self._dot_icon(tab.modified))
         self.tabs.setTabToolTip(index, tab.path or "Unsaved document")
         if tab is self.current_document():
-            folder = ""
-            if tab.path:
-                root = Path(self._cfg.get("notes_root") or "")
-                try:
-                    folder = Path(tab.path).resolve().parent.relative_to(
-                        root.resolve()
-                    ).as_posix()
-                except (ValueError, OSError):
-                    folder = Path(tab.path).parent.name
-                folder = "" if folder == "." else folder
-            self.top_bar.set_breadcrumb(folder, tab.display_name)
-            self.sidebar.set_active_note(tab.path or None)
             self._update_status()
             marker = "● " if tab.modified else ""
             self.setWindowTitle(f"{marker}{tab.display_name} — {APP_TITLE}")
@@ -1849,40 +1845,10 @@ class MainWindow(QMainWindow):
         for index in range(self.tabs.count()):
             self.tabs.widget(index).editor.set_line_numbers_visible(checked)
 
-    def toggle_sidebar(self, checked: bool):
-        self.sidebar.setVisible(checked)
-        self._cfg["sidebar_visible"] = checked
-        settings_manager.save(self._cfg)
-
-    def _apply_sidebar_side(self):
-        """Order the splitter so the sidebar sits on the configured side.
-
-        Useful when writing RTL, where a left sidebar sits between you and
-        the start of every line.
-        """
-        on_right = self._cfg.get("sidebar_on_right", False)
-        sidebar_index = self._splitter.indexOf(self.sidebar)
-        wanted_index = 1 if on_right else 0
-        if sidebar_index != wanted_index:
-            # insertWidget reparents in place; the widget keeps its state.
-            self._splitter.insertWidget(wanted_index, self.sidebar)
-        editor_index = 1 - wanted_index
-        self._splitter.setCollapsible(wanted_index, True)
-        self._splitter.setCollapsible(editor_index, False)
-        sizes = [260, 800] if not on_right else [800, 260]
-        self._splitter.setSizes(sizes)
-
-    def set_sidebar_on_right(self, checked: bool):
-        self._cfg["sidebar_on_right"] = checked
-        settings_manager.save(self._cfg)
-        self._apply_sidebar_side()
-
-    def _open_from_sidebar(self, path: str):
-        self.open_file(path)
-
-    def _sidebar_root_changed(self, folder: str):
+    def set_notes_root(self, folder: str):
         self._cfg["notes_root"] = folder
         settings_manager.save(self._cfg)
+        self.notes_board.set_root(folder)
         if self._tasks_watcher is not None:
             self._tasks_watcher.set_root(folder)
 
@@ -2100,6 +2066,8 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(250, self._offer_legacy_migration)
         self._prune_empty_daily_notes()
         self._start_task_watcher()
+        if self._cfg.get("day_widget"):
+            self._show_day_widget()
 
     def _prune_empty_daily_notes(self):
         """Clear the empty day notes older versions left behind — once.
@@ -2121,10 +2089,52 @@ class MainWindow(QMainWindow):
         if not removed:
             return
         log.info("Removed %d empty daily note(s)", len(removed))
-        self.sidebar.refresh()
+        self.notes_board.reload()
         self.statusBar().showMessage(
             to_persian_digits(f"{len(removed)} یادداشت روزانهٔ خالی پاک شد"), 5000
         )
+
+    def toggle_day_widget(self, shown: bool | None = None):
+        """Ctrl+Shift+W — the small panel that sits on the desktop."""
+        if shown is None:
+            shown = self._day_widget is None or not self._day_widget.isVisible()
+        self._cfg["day_widget"] = bool(shown)
+        settings_manager.save(self._cfg)
+        self.day_widget_action.setChecked(bool(shown))
+        if not shown:
+            if self._day_widget is not None:
+                self._day_widget.hide()
+            return
+        self._show_day_widget()
+
+    def _show_day_widget(self):
+        if self._day_widget is None:
+            self._day_widget = DayWidget()
+            self._day_widget.task_toggled.connect(self.set_task_done)
+            self._day_widget.task_opened.connect(self._open_task_from_widget)
+            self._day_widget.open_requested.connect(self._reveal_window)
+            self._day_widget.closed.connect(
+                lambda: self.toggle_day_widget(False)
+            )
+            self._day_widget.snap_to_corner(self.screen())
+        self._day_widget.show()
+        self._start_task_watcher()
+        self.refresh_day_widget()
+        if self._tasks_watcher is not None:
+            self._tasks_watcher.check_now()
+
+    def refresh_day_widget(self):
+        if self._day_widget is not None and self._tasks_watcher is not None:
+            self._day_widget.set_tasks(self._tasks_watcher.all_tasks())
+
+    def _open_task_from_widget(self, path: str, line_number: int):
+        self._reveal_window()
+        self.open_task_in_editor(path, line_number)
+
+    def _reveal_window(self):
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
 
     def _install_tray(self):
         """Put the app in the notification area, if there is one.
@@ -2139,6 +2149,57 @@ class MainWindow(QMainWindow):
         # The window is no longer what keeps the process alive.
         QApplication.setQuitOnLastWindowClosed(False)
 
+    # Pages
+
+    PAGE_INDEX = {"notes": 0, "calendar": 1, "editor": 2}
+
+    def show_page(self, key: str):
+        """Switch between the notes board, the calendar and the editor."""
+        index = self.PAGE_INDEX.get(key)
+        if index is None:
+            return
+        self.pages.setCurrentIndex(index)
+        self.top_bar.set_page(key)
+        # Cursor position, word count and the encoding chip describe a
+        # document; on the boards there is no document for them to describe.
+        self.statusBar().setVisible(key == "editor")
+        self._cfg["page"] = key
+        settings_manager.save(self._cfg)
+        # Each board is a view over files that anything may have changed, so
+        # it re-reads on the way in rather than trusting what it last drew.
+        if key == "notes":
+            self.notes_board.reload()
+        elif key == "calendar":
+            self.refresh_calendar()
+        else:
+            tab = self.current_document()
+            if tab:
+                tab.editor.setFocus()
+
+    def open_note_from_board(self, path: str):
+        if self.open_file(path):
+            self.show_page("editor")
+
+    def new_note_from_board(self):
+        self.new_document()
+        self.show_page("editor")
+
+    def open_task_in_editor(self, path: str, line_number: int):
+        self._open_task(path, line_number)
+        self.show_page("editor")
+
+    def refresh_calendar(self):
+        """Hand the calendar every dated task, off the UI thread."""
+        if self._tasks_watcher is None:
+            self._start_task_watcher()
+        if self._tasks_watcher is not None:
+            self.month_view.set_tasks(self._tasks_watcher.all_tasks())
+            self._tasks_watcher.check_now()
+
+    def _add_day_task(self, day, text: str):
+        if self.add_task_to_day(day, text):
+            self.statusBar().showMessage("کار به این روز اضافه شد", 2500)
+
     def _start_task_watcher(self):
         """Begin keeping the task counts fresh.
 
@@ -2151,6 +2212,12 @@ class MainWindow(QMainWindow):
         self._tasks_watcher = TaskWatcher(self._cfg["notes_root"], self)
         self._tasks_watcher.progress_changed.connect(self.update_today_meter)
         self._tasks_watcher.open_count_changed.connect(self.update_open_task_count)
+        # The calendar redraws from every completed scan, so a change made in
+        # the editor shows up there without anyone asking.
+        self._tasks_watcher.scanned.connect(
+            lambda: self.month_view.set_tasks(self._tasks_watcher.all_tasks())
+        )
+        self._tasks_watcher.scanned.connect(self.refresh_day_widget)
         self._tasks_watcher.start()
 
     def _tab_for_pending(self, path: str) -> DocumentTab | None:
@@ -2175,21 +2242,25 @@ class MainWindow(QMainWindow):
                 return tab
         return None
 
-    def _snooze_task(self, path: str, line_number: int, days: int):
-        """Push one task's date forward by `days`.
+    def rewrite_task_line(self, path: str, line_number: int, transform) -> bool:
+        """Apply `transform` to one line of a note, wherever that note lives.
 
-        A note that is already open is edited through its document, so the
-        change joins that tab's undo stack and any unsaved work in it
-        survives; only a note nobody has open is rewritten on disk.
+        A note that is open is edited through its document, so the change
+        joins that tab's undo stack and any unsaved work in it survives; only
+        a note nobody has open is rewritten on disk. Every surface that
+        changes a task — the calendar, the day widget, the tasks window —
+        goes through here, because getting this wrong loses typing.
+
+        `transform` returns the new line, or None to leave it alone.
         """
         tab = self._tab_for_path(path)
         if tab is not None:
             block = tab.editor.document().findBlockByNumber(line_number)
             if not block.isValid():
-                return
-            moved = shift_stamp(block.text(), days)
-            if moved is None:
-                return
+                return False
+            changed = transform(block.text())
+            if changed is None or changed == block.text():
+                return False
             # Anchored from the start of the block to its end rather than
             # QTextCursor.BlockUnderCursor, which also takes the newline
             # before it — replacing that joined the line onto the one above.
@@ -2201,28 +2272,70 @@ class MainWindow(QMainWindow):
                 QTextCursor.MoveOperation.EndOfBlock,
                 QTextCursor.MoveMode.KeepAnchor,
             )
-            cursor.insertText(moved)
+            cursor.insertText(changed)
             cursor.endEditBlock()
-            self.statusBar().showMessage("کار به فردا موکول شد", 3000)
-            return
+            return True
 
         try:
             loaded = read_text_file(path)
             lines = loaded.text.splitlines(keepends=True)
             if line_number >= len(lines):
-                return
+                return False
             original = lines[line_number]
-            body = original.rstrip("\r\n")
-            moved = shift_stamp(body, days)
-            if moved is None:
-                return
-            lines[line_number] = moved + original[len(body):]
+            body = original.rstrip(NEWLINE_CHARS)
+            changed = transform(body)
+            if changed is None or changed == body:
+                return False
+            lines[line_number] = changed + original[len(body):]
             write_text_file_atomic(path, "".join(lines), loaded.encoding)
         except (OSError, UnicodeError):
-            log.warning("Could not snooze the task in %s", path, exc_info=True)
+            log.warning("Could not rewrite %s line %s", path, line_number, exc_info=True)
+            return False
+        return True
+
+    def _snooze_task(self, path: str, line_number: int, days: int):
+        """Push one task's date forward by `days`."""
+        if self.rewrite_task_line(
+            path, line_number, lambda line: shift_stamp(line, days)
+        ):
+            self.statusBar().showMessage("کار به فردا موکول شد", 3000)
+            self._notify_tasks_changed()
+        else:
             self.statusBar().showMessage("تعویق این کار ممکن نشد", 4000)
-            return
-        self.statusBar().showMessage("کار به فردا موکول شد", 3000)
+
+    def set_task_done(self, path: str, line_number: int, done: bool):
+        """Tick or untick one task from a surface outside the editor."""
+        def transform(line: str):
+            task = parse_task(line)
+            return None if task is None or task.done == done else toggle_done(line)
+
+        if self.rewrite_task_line(path, line_number, transform):
+            self._notify_tasks_changed()
+
+    def add_task_to_day(self, day, text: str) -> bool:
+        """Put a new task on a calendar day, in that day's note."""
+        if not text.strip():
+            return False
+        try:
+            path = daily_notes.add_task(self._cfg["notes_root"], day, text)
+        except (OSError, UnicodeError):
+            log.warning("Could not add a task for %s", day, exc_info=True)
+            self.statusBar().showMessage("افزودن این کار ممکن نشد", 4000)
+            return False
+        # The note may be open with unsaved edits; reloading it underneath
+        # would lose them, so say so instead of silently diverging.
+        tab = self._tab_for_path(str(path))
+        if tab is not None and not tab.modified:
+            self._reload_document_from_disk(tab)
+        self.notes_board.reload()
+        self._notify_tasks_changed()
+        return True
+
+    def _notify_tasks_changed(self):
+        """Every task surface re-reads after a change, so none drifts."""
+        if self._tasks_watcher is not None:
+            self._tasks_watcher.check_now()
+        self.tasks_changed.emit()
 
     def _open_task(self, path: str, line_number: int):
         """Jump to the exact line a task came from."""
@@ -2348,14 +2461,6 @@ class MainWindow(QMainWindow):
                 self.restoreGeometry(QByteArray.fromBase64(encoded.encode("ascii")))
             except Exception:
                 pass
-        splitter_state = self._cfg.get("splitter_state")
-        if splitter_state:
-            try:
-                self._splitter.restoreState(
-                    QByteArray.fromBase64(splitter_state.encode("ascii"))
-                )
-            except Exception:
-                pass
 
     def quit_application(self):
         """Really leave — the tray menu's "خروج" and File > Exit.
@@ -2393,15 +2498,16 @@ class MainWindow(QMainWindow):
         self._save_window_state()
         if self._tray is not None:
             self._tray.hide()
+        if self._day_widget is not None:
+            # A Tool window outlives the main window and would keep the
+            # process alive with nothing on screen to close it from.
+            self._day_widget.close()
         event.accept()
         QApplication.quit()
 
     def _save_window_state(self):
         self._cfg["window_geometry"] = bytes(
             self.saveGeometry().toBase64()
-        ).decode("ascii")
-        self._cfg["splitter_state"] = bytes(
-            self._splitter.saveState().toBase64()
         ).decode("ascii")
         settings_manager.save(self._cfg)
 

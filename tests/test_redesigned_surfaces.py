@@ -1,17 +1,18 @@
-"""The two surfaces the redesign restructured: the sidebar and My Tasks.
+"""The My Tasks window (Ctrl+T).
 
-The sidebar became three panes behind a switch instead of four things
-stacked in one column, and My Tasks grew three ways of reading the same
-list. Both are wired to a folder scan, so the tests here care most about
-what is shown and when the scan is allowed to happen.
+4.1 replaced the sidebar with the notes board and the calendar, so the
+sidebar half of this file went with it. What is left is the window that
+still exists.
+
+My Tasks once grew three ways of reading the same list; 4.0 cut it back to
+one. What it shows, and when it is allowed to scan the folder, is what these
+tests care about.
 """
 from datetime import datetime, timedelta
 
 import pytest
 
 from core.jalali import format_date
-from core.tasks import parse_document
-from ui.sidebar import PANES, Sidebar
 from ui.today_view import TodayDialog, when_label
 
 
@@ -36,103 +37,6 @@ def notes(tmp_path):
         encoding="utf-8",
     )
     return tmp_path
-
-
-# The sidebar
-
-def test_the_sidebar_offers_notes_tasks_and_calendar(qapp, notes):
-    sidebar = Sidebar(str(notes))
-    assert [key for key, _ in PANES] == ["notes", "tasks", "calendar"]
-    assert set(sidebar._pane_buttons) == {"notes", "tasks", "calendar"}
-    sidebar.deleteLater()
-
-
-def test_notes_is_the_pane_you_land_on(qapp, notes):
-    sidebar = Sidebar(str(notes))
-    assert sidebar._pane_buttons["notes"].isChecked()
-    assert sidebar._panes.currentIndex() == 0
-    sidebar.deleteLater()
-
-
-def test_switching_panes_checks_exactly_one_button(qapp, notes):
-    sidebar = Sidebar(str(notes))
-    sidebar.show_pane("calendar")
-    checked = [k for k, b in sidebar._pane_buttons.items() if b.isChecked()]
-    assert checked == ["calendar"]
-    assert sidebar._panes.currentIndex() == 2
-    sidebar.deleteLater()
-
-
-def _count_scans(sidebar) -> list:
-    """Stub out the folder read, keeping the staleness bookkeeping it does."""
-    scans: list = []
-
-    def fake_scan():
-        sidebar._tasks_stale = False
-        scans.append(1)
-
-    sidebar._scan_tasks = fake_scan
-    return scans
-
-
-def test_the_notes_pane_does_not_scan_every_file_for_tasks(qapp, notes):
-    """Reading every note is what the tasks pane costs; opening the sidebar
-    on notes must not pay it."""
-    sidebar = Sidebar(str(notes))
-    scans = _count_scans(sidebar)
-    sidebar.show_pane("notes")
-    assert scans == []
-    sidebar.show_pane("tasks")
-    assert scans == [1]
-    sidebar.deleteLater()
-
-
-def test_a_second_look_at_tasks_reuses_the_last_scan(qapp, notes):
-    sidebar = Sidebar(str(notes))
-    scans = _count_scans(sidebar)
-    sidebar.show_pane("tasks")
-    sidebar.show_pane("notes")
-    sidebar.show_pane("tasks")
-    assert scans == [1], "the folder was rescanned without anything changing"
-    sidebar.deleteLater()
-
-
-def test_a_refresh_makes_the_task_list_stale_again(qapp, notes):
-    """Saving a note can add a task, so the next look has to rescan."""
-    sidebar = Sidebar(str(notes))
-    scans = _count_scans(sidebar)
-    sidebar.show_pane("tasks")
-    sidebar._tasks_stale = True          # what refresh() sets
-    sidebar.show_pane("notes")
-    sidebar.show_pane("tasks")
-    assert scans == [1, 1]
-    sidebar.deleteLater()
-
-
-def test_the_task_pane_groups_by_urgency(qapp, notes):
-    sidebar = Sidebar(str(notes))
-    sidebar._tasks_scanned(parse_document(
-        (notes / "today.md").read_text(encoding="utf-8"), str(notes / "today.md")
-    ) + parse_document(
-        (notes / "Clients" / "بامسما.md").read_text(encoding="utf-8"),
-        str(notes / "Clients" / "بامسما.md"),
-    ))
-    headers = sidebar.task_list.header_texts()
-    assert "عقب‌افتاده" in headers
-    assert "امروز" in headers
-    assert "بدون تاریخ" in headers
-    sidebar.deleteLater()
-
-
-def test_a_finished_task_is_not_listed(qapp, notes):
-    sidebar = Sidebar(str(notes))
-    path = str(notes / "today.md")
-    sidebar._tasks_scanned(
-        parse_document((notes / "today.md").read_text(encoding="utf-8"), path)
-    )
-    shown = sidebar.task_list.task_texts()
-    assert not any("انجام شده" in text for text in shown)
-    sidebar.deleteLater()
 
 
 # My Tasks

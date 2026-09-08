@@ -55,6 +55,11 @@ DEFAULTS = {
     # One-time tidy-up of the empty day notes 3.x created on every
     # calendar click. Latched so it runs once, not every launch.
     "daily_cleanup_done": False,
+    # Which of the three pages the window opens on: notes, calendar
+    # or editor. Whichever you left it on is the one you want back.
+    "page": "notes",
+    # The small desktop panel showing today. Off until asked for.
+    "day_widget": False,
 }
 
 DIRECTION_MODES = ("rtl", "ltr", "auto")

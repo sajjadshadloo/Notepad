@@ -446,7 +446,6 @@ class SmartEditor(QTextEdit):
                 self.setExtraSelections([])
             return
 
-        document = self.document()
         # From the palette, not a fixed pair: a hardcoded blue-grey stayed
         # blue-grey under the warm and violet palettes.
         background = QColor(current_palette()["surface_alt"])

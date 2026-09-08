@@ -516,6 +516,53 @@ QScrollBar::handle:horizontal {{
 }}
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
 
+/* The three pages. Each owns the whole window below the top bar, so each
+   paints the window colour and nothing draws a frame around it. */
+/* The desktop panel. Its surface is painted in ui/day_widget.py because a
+   translucent window ignores a stylesheet background; only the text here. */
+#dayWidgetHeading {{
+    color: {t['text']};
+    font-size: 14px;
+    font-weight: 700;
+}}
+#dayWidgetProgress {{
+    color: {t['muted']};
+    font-size: 11px;
+}}
+#notesBoard, #monthView {{
+    background: {t['window']};
+}}
+#noteCardGrid {{
+    background: transparent;
+    border: none;
+    outline: none;
+}}
+/* Cards are painted by ui/note_cards.py; no ::item rules, or the sheet and
+   the delegate would fight over the same pixels. */
+#emptyHint {{
+    color: {t['muted']};
+    font-size: 13px;
+}}
+#monthTitle {{
+    color: {t['text']};
+    font-size: 17px;
+    font-weight: 700;
+}}
+#dayPanel {{
+    background: {t['surface']};
+    border: 1px solid {t['border']};
+    border-radius: 12px;
+}}
+#dayInput {{
+    background: {t['window']};
+    border: 1px solid {t['border']};
+    border-radius: 8px;
+    padding: 7px 10px;
+    color: {t['text']};
+    font-size: 13px;
+}}
+#dayInput:focus {{ border-color: {t['accent']}; }}
+
 #sidebar {{
     background: {t['surface']};
     border-right: 1px solid {t['border']};

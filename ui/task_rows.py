@@ -10,7 +10,7 @@ Getting this from a plain QTreeWidget is not possible: it gives one elided
 line per row, an indent column, and an expand arrow the design does not have.
 So the rows are painted here, and both task surfaces share it.
 """
-from PyQt6.QtCore import QRect, QSize, Qt
+from PyQt6.QtCore import QRect, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen
 from PyQt6.QtWidgets import QListWidget, QListWidgetItem, QStyledItemDelegate
 
@@ -227,6 +227,9 @@ class TaskRowDelegate(QStyledItemDelegate):
 class TaskList(QListWidget):
     """A flat list of headings and task rows — no indent, no expand arrows."""
 
+    # (path, line_number, done) — the box was clicked and wants that state.
+    task_toggled = pyqtSignal(str, int, bool)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("taskList")
@@ -275,6 +278,36 @@ class TaskList(QListWidget):
 
     def payload_of(self, item) -> tuple | None:
         return item.data(ROLE_PAYLOAD) if item is not None else None
+
+    def box_rect(self, item) -> QRect:
+        """Where this row's checkbox is drawn, in viewport coordinates.
+
+        The delegate owns the geometry, so this mirrors it deliberately: a
+        painted box is not a widget and Qt will not hit-test it for us.
+        """
+        rect = self.visualItemRect(item)
+        return QRect(
+            rect.right() - PAD_X - BOX,
+            rect.top() + PAD_Y + TOP_NUDGE,
+            BOX,
+            BOX,
+        )
+
+    def mousePressEvent(self, event):
+        """A click on the box ticks the task; anywhere else selects the row."""
+        item = self.itemAt(event.pos())
+        if item is not None and item.data(ROLE_KIND) == KIND_TASK:
+            payload = self.payload_of(item)
+            # A little slack around a 14px target, which is small for a mouse.
+            if payload and self.box_rect(item).adjusted(-4, -4, 4, 4).contains(
+                event.pos()
+            ):
+                fields = item.data(ROLE_FIELDS) or {}
+                self.task_toggled.emit(
+                    payload[0], payload[1], not bool(fields.get("done"))
+                )
+                return
+        super().mousePressEvent(event)
 
     # Rows are painted, not labelled, so the text lives in the fields rather
     # than in DisplayRole. These read it back — for tests, and for anything

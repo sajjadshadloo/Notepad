@@ -47,6 +47,8 @@ class TaskWatcher(QObject):
     progress_changed = pyqtSignal(int, int)
     # How many tasks are still open — shown on the top bar's tasks button.
     open_count_changed = pyqtSignal(int)
+    # A scan finished; whatever is on screen may now be stale.
+    scanned = pyqtSignal()
 
     def __init__(self, root: str, parent=None):
         super().__init__(parent)
@@ -71,6 +73,14 @@ class TaskWatcher(QObject):
         """
         return sort_for_today(list(self._tasks), datetime.now())
 
+    def all_tasks(self) -> list[Task]:
+        """Everything from the last scan, finished included.
+
+        The calendar wants the finished ones too: a day that shows only what
+        is left looks empty by evening, which is the opposite of the point.
+        """
+        return list(self._tasks)
+
     def check_now(self):
         if self._worker is not None and self._worker.isRunning():
             return
@@ -83,6 +93,7 @@ class TaskWatcher(QObject):
         done, total = today_progress(tasks, datetime.now())
         self.progress_changed.emit(done, total)
         self.open_count_changed.emit(sum(1 for t in tasks if not t.done))
+        self.scanned.emit()
 
     def stop(self):
         self._timer.stop()

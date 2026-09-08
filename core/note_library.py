@@ -1,0 +1,133 @@
+"""Reading the notes folder as a set of cards, grouped by subfolder.
+
+The folder *is* the category. Nothing is stored anywhere else: make a folder
+in Explorer and it becomes a tab, move a file and it changes category. A
+tagging scheme would have to be kept up by hand, and the 3.0 experiment with
+one showed that in practice it never is.
+"""
+import logging
+from dataclasses import dataclass
+from pathlib import Path
+
+from core.file_service import read_text_file
+from core.tasks import parse_task, stamp_span
+
+log = logging.getLogger(__name__)
+
+NOTE_EXTENSIONS = (".txt", ".md", ".markdown")
+
+# A card shows a handful of lines, so there is no reason to look at more of
+# a long note than that. 39 KB notes exist in real folders.
+PREVIEW_CHARS = 2000
+PREVIEW_LINES = 4
+PREVIEW_TASKS = 6
+
+ROOT_LABEL = "عمومی"
+
+
+@dataclass(frozen=True)
+class CardTask:
+    done: bool
+    text: str
+
+
+@dataclass(frozen=True)
+class NoteCard:
+    path: str
+    title: str
+    folder: str
+    modified: float
+    lines: tuple[str, ...] = ()
+    tasks: tuple[CardTask, ...] = ()
+    open_tasks: int = 0
+
+    @property
+    def category(self) -> str:
+        """The tab this card belongs under."""
+        return self.folder or ROOT_LABEL
+
+
+def _strip_stamp(line: str) -> str:
+    """A card shows what the task *is*; the date is drawn by the calendar."""
+    span = stamp_span(line)
+    return (line[: span[0]] + line[span[1]:]).strip() if span else line.strip()
+
+
+def summarise(text: str, path: Path, folder: str, modified: float) -> NoteCard:
+    """Turn one note's text into the few lines a card can show."""
+    head = text[:PREVIEW_CHARS]
+    title = path.stem
+    lines: list[str] = []
+    tasks: list[CardTask] = []
+
+    for raw in head.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("#") and title == path.stem and not lines and not tasks:
+            # The first heading names the note better than its filename does.
+            title = line.lstrip("#").strip() or title
+            continue
+        task = parse_task(raw)
+        if task is not None:
+            if len(tasks) < PREVIEW_TASKS:
+                tasks.append(CardTask(done=task.done, text=_strip_stamp(task.text)))
+            continue
+        if len(lines) < PREVIEW_LINES:
+            lines.append(line)
+
+    # Counted over the whole note, not just the preview: the number on the
+    # card would be a lie otherwise.
+    open_tasks = sum(
+        1
+        for raw in text.splitlines()
+        if (parsed := parse_task(raw)) is not None and not parsed.done
+    )
+    return NoteCard(
+        path=str(path),
+        title=title,
+        folder=folder,
+        modified=modified,
+        lines=tuple(lines),
+        tasks=tuple(tasks),
+        open_tasks=open_tasks,
+    )
+
+
+def load_library(root: str | Path) -> list[NoteCard]:
+    """Every note under `root`, newest first. Meant to run off the UI thread."""
+    root_path = Path(root)
+    cards: list[NoteCard] = []
+    if not root_path.exists():
+        return cards
+    for path in root_path.rglob("*"):
+        if not path.is_file() or path.suffix.lower() not in NOTE_EXTENSIONS:
+            continue
+        try:
+            loaded = read_text_file(path)
+            modified = path.stat().st_mtime
+        except Exception:
+            continue
+        relative = path.parent.relative_to(root_path)
+        folder = "" if relative == Path(".") else relative.parts[0]
+        cards.append(summarise(loaded.text, path, folder, modified))
+    cards.sort(key=lambda card: card.modified, reverse=True)
+    return cards
+
+
+def categories(cards: list[NoteCard]) -> list[str]:
+    """Tab labels, in the order they should appear.
+
+    Root notes lead — they are the ones without a home yet — and the rest
+    follow alphabetically so the tabs do not reshuffle as files are touched.
+    """
+    names = {card.category for card in cards}
+    ordered = sorted(name for name in names if name != ROOT_LABEL)
+    return ([ROOT_LABEL] if ROOT_LABEL in names else []) + ordered
+
+
+def in_category(cards: list[NoteCard], category: str) -> list[NoteCard]:
+    """Cards for one tab; an empty category name means all of them."""
+    if not category:
+        return list(cards)
+    return [card for card in cards if card.category == category]

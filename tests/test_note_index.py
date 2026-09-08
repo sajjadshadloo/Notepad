@@ -1,5 +1,4 @@
 import json
-import os
 
 import core.note_index as note_index
 

@@ -23,6 +23,8 @@ from PyQt6.QtWidgets import (
 from ui.icons import icon, icon_size
 from ui.styles import current_palette
 
+PAGES = (("notes", "دفترچه"), ("calendar", "تقویم"), ("editor", "ویرایش"))
+
 BAR_HEIGHT = 44
 SIDE_BLOCK = 270
 SEARCH_MAX_WIDTH = 440
@@ -64,7 +66,8 @@ class _IconButton(QToolButton):
 
 class TopBar(QWidget):
     search_requested = pyqtSignal()
-    sidebar_toggled = pyqtSignal()
+    # "notes" | "calendar" | "editor" — which of the three pages to show.
+    page_requested = pyqtSignal(str)
     tasks_requested = pyqtSignal()
     theme_toggled = pyqtSignal()
     settings_requested = pyqtSignal()
@@ -78,6 +81,11 @@ class TopBar(QWidget):
         # its own, which read as a stray lighter box around the tab.
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setFixedHeight(BAR_HEIGHT)
+        # The app is Persian, so the eye starts on the right: the brand and
+        # the page switch belong there, and the icon buttons close on the
+        # left. The design put them the other way round because its chrome
+        # was English.
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
 
         row = QHBoxLayout(self)
         row.setContentsMargins(10, 0, 10, 0)
@@ -87,7 +95,7 @@ class TopBar(QWidget):
         row.addWidget(self._build_search(), 1)
         row.addWidget(self._build_right())
 
-    # Left: brand, sidebar toggle, breadcrumb
+    # Left: brand, then the switch between the three pages
 
     def _build_left(self) -> QWidget:
         block = QWidget()
@@ -101,18 +109,35 @@ class TopBar(QWidget):
         self.brand.setFixedSize(BRAND_SIZE, BRAND_SIZE)
         row.addWidget(self.brand)
 
-        self.sidebar_button = _IconButton("sidebar", "Sidebar — Ctrl+Shift+B")
-        self.sidebar_button.setFixedWidth(BUTTON_SIZE)
-        self.sidebar_button.clicked.connect(self.sidebar_toggled)
-        row.addWidget(self.sidebar_button)
-
-        self.breadcrumb = QLabel()
-        self.breadcrumb.setObjectName("breadcrumb")
-        self.breadcrumb.setSizePolicy(
-            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
-        )
-        row.addWidget(self.breadcrumb, 1)
+        # The whole app is these three, so the switch is the first thing on
+        # the bar rather than something to find in a menu.
+        switch = QWidget()
+        switch.setObjectName("segmented")
+        switch.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        switch.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        switch_row = QHBoxLayout(switch)
+        switch_row.setContentsMargins(0, 0, 0, 0)
+        switch_row.setSpacing(2)
+        self.page_buttons: dict[str, QToolButton] = {}
+        for key, label in PAGES:
+            button = QToolButton()
+            button.setText(label)
+            button.setCheckable(True)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+            )
+            button.clicked.connect(
+                lambda _checked=False, chosen=key: self.page_requested.emit(chosen)
+            )
+            switch_row.addWidget(button, 1)
+            self.page_buttons[key] = button
+        row.addWidget(switch, 1)
         return block
+
+    def set_page(self, key: str):
+        for name, button in self.page_buttons.items():
+            button.setChecked(name == key)
 
     # Centre: the one search field
 
@@ -154,7 +179,7 @@ class TopBar(QWidget):
         )
         inner.addWidget(self.search_icon)
 
-        self.search_label = QLabel("Search notes, tasks and commands")
+        self.search_label = QLabel("جست‌وجو در یادداشت‌ها، کارها و دستورها")
         self.search_label.setObjectName("topSearchLabel")
         self.search_label.setAttribute(
             Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
@@ -212,10 +237,6 @@ class TopBar(QWidget):
 
     # State
 
-    def set_breadcrumb(self, folder: str, name: str):
-        self.breadcrumb.setText(f"{folder} / {name}" if folder else name)
-        self.breadcrumb.setToolTip(self.breadcrumb.text())
-
     def set_open_task_count(self, count: str):
         """Blank hides the number, so the button is a plain square again."""
         self.tasks_button.setText(f" {count}" if count else "")
@@ -223,7 +244,6 @@ class TopBar(QWidget):
     def refresh_palette(self):
         """Re-render the stroke icons and the brand square after a restyle."""
         for button in (
-            self.sidebar_button,
             self.tasks_button,
             self.theme_button,
             self.settings_button,

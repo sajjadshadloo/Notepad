@@ -18,6 +18,10 @@ def window(tmp_path, monkeypatch, qapp):
     window = MainWindow()
     window._cfg["notes_root"] = str(tmp_path / "notes")
     window.resize(1158, 576)
+    # The tab strip lives on the editor page now, and a page that is not the
+    # current one is never laid out — every measurement here would be of a
+    # widget Qt has not sized yet.
+    window.show_page("editor")
     window.show()
     qapp.processEvents()
     yield window
@@ -78,13 +82,14 @@ def test_the_top_bar_keeps_the_designs_height(window):
 
 
 def test_the_chrome_stacks_in_the_designs_order(window, qapp):
-    """Top bar, tab strip, format bar, then the sidebar and editor."""
+    """Top bar, tab strip, format bar, then the pages."""
+    window.show_page("editor")
     qapp.processEvents()
     tops = [
         window.top_bar.mapTo(window, window.top_bar.rect().topLeft()).y(),
         window.tabs.mapTo(window, window.tabs.rect().topLeft()).y(),
         window.format_bar.mapTo(window, window.format_bar.rect().topLeft()).y(),
-        window._splitter.mapTo(window, window._splitter.rect().topLeft()).y(),
+        window.tabs.pages.mapTo(window, window.tabs.pages.rect().topLeft()).y(),
     ]
     assert tops == sorted(tops), tops
 

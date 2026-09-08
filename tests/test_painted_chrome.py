@@ -26,7 +26,7 @@ def window(tmp_path, monkeypatch, qapp):
     # walking one of those crashes the interpreter outright.
     window.setStyleSheet(build_stylesheet("dark", "graphite"))
     window._cfg["notes_root"] = str(tmp_path / "notes")
-    window.sidebar.setVisible(True)
+    window.show_page("editor")
     window.resize(1100, 560)
     window.show()
     qapp.processEvents()
@@ -66,9 +66,12 @@ def test_the_strip_matches_under_and_beside_the_tabs(window, qapp):
     assert beside == far
 
 
-def test_the_sidebar_paints_the_chrome_colour(window, qapp, tokens):
+def test_the_notes_board_paints_the_window_colour(window, qapp, tokens):
+    """The board is a page, not a panel: it owns the whole area below the bar
+    and so paints the window colour, with the cards raised on top of it."""
+    window.show_page("notes")
     qapp.processEvents()
-    assert _colour_at(window, window.sidebar, 6, 300) == tokens["surface"]
+    assert _colour_at(window, window.notes_board, 6, 300) == tokens["window"]
 
 
 def test_the_format_bar_sits_on_the_page_colour(window, qapp, tokens):
