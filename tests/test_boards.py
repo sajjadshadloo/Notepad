@@ -228,3 +228,51 @@ def test_ticking_a_box_on_the_widget_reports_the_line(qapp, dated):
     )
     assert seen and seen[0][2] is True
     widget.deleteLater()
+
+
+# Launching straight onto a page
+#
+# The window restores its last page inside __init__, before the task watcher
+# used to exist. Opening onto the calendar therefore crashed on launch, with
+# no window ever shown — and the setting that caused it was written by the
+# previous run, so it would have crashed every time until settings were
+# cleared by hand.
+
+@pytest.mark.parametrize("page", ["notes", "calendar", "editor"])
+def test_the_window_can_open_on_any_page(qapp, tmp_path, monkeypatch, page):
+    from core import settings_manager
+    from ui.main_window import MainWindow
+
+    data = tmp_path / "appdata"
+    data.mkdir()
+    monkeypatch.setattr(settings_manager, "app_data_dir", lambda: data)
+    settings_manager.save({**settings_manager.DEFAULTS, "page": page})
+
+    window = MainWindow([])
+    assert window.pages.currentIndex() == window.PAGE_INDEX[page]
+
+    for index in range(window.tabs.count()):
+        window.tabs.widget(index).mark_clean()
+    window._really_quitting = True
+    window.close()
+    window.deleteLater()
+
+
+def test_an_unknown_saved_page_is_survivable(qapp, tmp_path, monkeypatch):
+    """A setting from a future version must not take the window down."""
+    from core import settings_manager
+    from ui.main_window import MainWindow
+
+    data = tmp_path / "appdata"
+    data.mkdir()
+    monkeypatch.setattr(settings_manager, "app_data_dir", lambda: data)
+    settings_manager.save({**settings_manager.DEFAULTS, "page": "gallery"})
+
+    window = MainWindow([])
+    assert window.pages.currentIndex() in window.PAGE_INDEX.values()
+
+    for index in range(window.tabs.count()):
+        window.tabs.widget(index).mark_clean()
+    window._really_quitting = True
+    window.close()
+    window.deleteLater()

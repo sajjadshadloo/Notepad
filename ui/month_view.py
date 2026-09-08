@@ -183,6 +183,7 @@ class MonthView(QWidget):
         self._selected = today
         self._tasks: list[Task] = []
         self._cells: dict[date, DayCell] = {}
+        self._root = ""
 
         row = QHBoxLayout(self)
         row.setContentsMargins(18, 16, 18, 18)
@@ -257,7 +258,7 @@ class MonthView(QWidget):
         self._list.itemActivated.connect(self._open)
         column.addWidget(self._list, 1)
 
-        self._open_note = QPushButton("باز کردن یادداشت روز")
+        self._open_note = QPushButton()
         self._open_note.setObjectName("tagChip")
         self._open_note.setCursor(Qt.CursorShape.PointingHandCursor)
         self._open_note.clicked.connect(
@@ -327,6 +328,25 @@ class MonthView(QWidget):
         self._spread_tasks()
         self._fill_panel()
 
+    def replace_day(self, day: date, tasks: list[Task]):
+        """Swap in one day's tasks, read straight from its note.
+
+        Adding a task used to wait for the background folder scan, so you
+        typed, pressed Enter, and the day stayed empty for a second or two —
+        which reads as nothing having happened. The file is written by then,
+        so re-reading that one note is both immediate and true.
+        """
+        self._tasks = [
+            task
+            for task in self._tasks
+            if not (task.due and task.due.date() == day)
+        ]
+        self._tasks.extend(task for task in tasks if task.due is not None)
+        if day in self._cells:
+            self._cells[day].set_tasks(self.tasks_on(day))
+        if day == self._selected:
+            self._fill_panel()
+
     def tasks_on(self, day: date) -> list[Task]:
         found = [t for t in self._tasks if t.due and t.due.date() == day]
         found.sort(key=lambda t: (t.done, t.text))
@@ -336,8 +356,17 @@ class MonthView(QWidget):
         for day, cell in self._cells.items():
             cell.set_tasks(self.tasks_on(day))
 
+    def set_root(self, root: str):
+        self._root = root
+        self._fill_panel()
+
     def _fill_panel(self):
         self._day_title.setText(format_long(self._selected))
+        self._open_note.setText(
+            "باز کردن یادداشت روز"
+            if self._note_exists(self._selected)
+            else "نوشتن یادداشت این روز"
+        )
         self._list.clear()
         tasks = self.tasks_on(self._selected)
         for task in tasks:
@@ -346,6 +375,11 @@ class MonthView(QWidget):
             self._list.add_empty("کاری برای این روز نیست")
 
     # Actions
+
+    def _note_exists(self, day: date) -> bool:
+        from core import daily_notes
+
+        return bool(self._root) and daily_notes.path_for(self._root, day).exists()
 
     def _submit(self):
         text = self._input.text().strip()

@@ -167,3 +167,56 @@ def test_a_line_number_past_the_end_is_survivable(window):
 
     window.set_task_done(str(path), 999, True)
     assert path.read_text(encoding="utf-8") == before
+
+
+# What the day panel does the instant you press Enter
+#
+# Both of these looked like the app ignoring the click: the task was written
+# but the day stayed empty, and the day-note button opened a tab behind the
+# calendar where nothing could be seen.
+
+def test_a_new_task_appears_in_the_panel_at_once(window):
+    """No waiting for the background scan — that reads as a dead Enter key."""
+    window.show_page("calendar")
+    today = date.today()
+    window.month_view.select_day(today)
+
+    window.month_view._input.setText("فاکتور مروارید")
+    window.month_view._submit()
+
+    assert window.month_view._list.texts() == ["فاکتور مروارید"]
+    assert [t.text for t in window.month_view.tasks_on(today)] == ["فاکتور مروارید"]
+
+
+def test_a_second_task_joins_the_first_rather_than_replacing_it(window):
+    window.show_page("calendar")
+    today = date.today()
+    window.month_view.select_day(today)
+    for text in ("یک", "دو"):
+        window.month_view._input.setText(text)
+        window.month_view._submit()
+
+    assert set(window.month_view._list.texts()) == {"یک", "دو"}
+
+
+def test_opening_a_days_note_switches_to_the_editor(window):
+    """The tab used to open behind the calendar, so the button looked dead."""
+    window.show_page("calendar")
+    window.open_daily_note(date(2026, 8, 27))
+
+    assert window.pages.currentIndex() == window.PAGE_INDEX["editor"]
+    assert window.current_document().display_name == "1405-06-05.md"
+
+
+def test_a_day_with_no_note_offers_to_write_one(window):
+    window.month_view.set_root(window._cfg["notes_root"])
+    window.month_view.select_day(date(2026, 8, 27))
+    assert window.month_view._open_note.text() == "نوشتن یادداشت این روز"
+
+
+def test_once_the_day_has_a_note_the_button_says_open(window):
+    window.month_view.set_root(window._cfg["notes_root"])
+    day = date(2026, 8, 27)
+    window.add_task_to_day(day, "کار")
+    window.month_view.select_day(day)
+    assert window.month_view._open_note.text() == "باز کردن یادداشت روز"

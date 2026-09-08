@@ -45,7 +45,7 @@ import core.note_index as note_index
 import core.settings_manager as settings_manager
 from core.external_change_monitor import ExternalChangeMonitor
 from core.jalali import to_persian_digits
-from core.tasks import parse_task
+from core.tasks import parse_document, parse_task
 from core.tasks import set_stamp, shift_stamp, toggle_repeat
 from core.formatting import (
     toggle_bold,
@@ -85,7 +85,7 @@ log = logging.getLogger(__name__)
 TAB_DOT_SIZE = 6
 
 APP_TITLE = "Notepad Plus"
-APP_VERSION = "4.1.0"
+APP_VERSION = "4.1.1"
 
 # Line endings, as characters rather than an escape.
 NEWLINE_CHARS = chr(13) + chr(10)
@@ -378,6 +378,11 @@ class MainWindow(QMainWindow):
         self._really_quitting = False
         self._tray: Tray | None = None
         self._day_widget: DayWidget | None = None
+        # Declared before anything is built. Restoring the last page happens
+        # inside __init__, and the calendar page asks the watcher for tasks
+        # on the way in — with this assigned at the end of __init__ instead,
+        # launching onto the calendar crashed before the window ever showed.
+        self._tasks_watcher: TaskWatcher | None = None
         # Tab status dots, keyed by colour; dropped when the palette changes.
         self._dot_icons: dict = {}
         self._zoom_steps = 0
@@ -430,7 +435,6 @@ class MainWindow(QMainWindow):
         # other windows — the app then looks like it simply failed to start.
         # showEvent runs them once the window is actually up.
         self._startup_prompts_shown = False
-        self._tasks_watcher: TaskWatcher | None = None
         self._install_tray()
 
     # Actions and chrome
@@ -811,6 +815,7 @@ class MainWindow(QMainWindow):
         self.notes_board.new_note_requested.connect(self.new_note_from_board)
 
         self.month_view = MonthView()
+        self.month_view.set_root(self._cfg["notes_root"])
         self.month_view.task_added.connect(self._add_day_task)
         self.month_view.task_toggled.connect(self.set_task_done)
         self.month_view.task_opened.connect(self.open_task_in_editor)
@@ -1160,7 +1165,7 @@ class MainWindow(QMainWindow):
             self.open_file(path)
 
     def open_daily_note(self, day=None):
-        """Ctrl+Shift+D — the note for a day.
+        """Ctrl+Shift+D, and the calendar's day-note button.
 
         Nothing is written to disk here. Until 4.0 this created the file on
         the spot, so browsing the calendar left a trail of notes containing
@@ -1174,27 +1179,25 @@ class MainWindow(QMainWindow):
         path = daily_notes.path_for(self._cfg["notes_root"], when)
         if not path.exists():
             existing = self._tab_for_pending(str(path))
-            if existing is not None:
+            if existing is None:
+                self._make_document(
+                    text=daily_notes.starter_text(when),
+                    pending_path=str(path),
+                )
+            else:
                 self.tabs.setCurrentWidget(existing)
-                existing.editor.setFocus()
-                return
-            self._make_document(
-                text=daily_notes.starter_text(when),
-                pending_path=str(path),
-            )
-            editor = self.current_document().editor
-            cursor = editor.textCursor()
-            cursor.movePosition(QTextCursor.MoveOperation.End)
-            editor.setTextCursor(cursor)
-            editor.setFocus()
+        elif not self.open_file(str(path)):
             return
-        if self.open_file(str(path)):
-            # Land at the end, ready to type rather than at the heading.
-            editor = self.current_document().editor
-            cursor = editor.textCursor()
-            cursor.movePosition(QTextCursor.MoveOperation.End)
-            editor.setTextCursor(cursor)
-            editor.setFocus()
+        # Showing the editor is the whole point of the button: without it the
+        # tab opened behind the calendar and the click looked like it did
+        # nothing at all.
+        self.show_page("editor")
+        # Land at the end, ready to type rather than at the heading.
+        editor = self.current_document().editor
+        cursor = editor.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        editor.setTextCursor(cursor)
+        editor.setFocus()
 
     def show_today(self):
         """Ctrl+T — the dated to-do items from every note, in one place."""
@@ -1849,6 +1852,7 @@ class MainWindow(QMainWindow):
         self._cfg["notes_root"] = folder
         settings_manager.save(self._cfg)
         self.notes_board.set_root(folder)
+        self.month_view.set_root(folder)
         if self._tasks_watcher is not None:
             self._tasks_watcher.set_root(folder)
 
@@ -2197,8 +2201,19 @@ class MainWindow(QMainWindow):
             self._tasks_watcher.check_now()
 
     def _add_day_task(self, day, text: str):
-        if self.add_task_to_day(day, text):
-            self.statusBar().showMessage("کار به این روز اضافه شد", 2500)
+        if not self.add_task_to_day(day, text):
+            return
+        # Read that one note back now. The background scan will agree in a
+        # minute or two, but waiting for it means typing a task and watching
+        # the day stay empty, which reads as nothing having happened.
+        path = daily_notes.path_for(self._cfg["notes_root"], day)
+        try:
+            self.month_view.replace_day(
+                day, parse_document(read_text_file(path).text, str(path.resolve()))
+            )
+        except (OSError, UnicodeError):
+            log.warning("Could not re-read %s", path, exc_info=True)
+        self.statusBar().showMessage("کار به این روز اضافه شد", 2500)
 
     def _start_task_watcher(self):
         """Begin keeping the task counts fresh.
