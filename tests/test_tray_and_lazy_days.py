@@ -28,6 +28,21 @@ def window(qapp, tmp_path, monkeypatch):
     win = MainWindow([])
     win._cfg["notes_root"] = str(notes)
     yield win
+    _shut_down(win)
+
+
+def _shut_down(win):
+    """Close a window without any chance of a modal prompt.
+
+    A tab with unsaved changes asks "save changes?" on close, and in a
+    headless run that dialog has nobody to answer it — the whole session
+    stops there. Each tab is marked clean immediately before it is closed,
+    rather than all of them up front, so nothing that runs in between can
+    dirty one again.
+    """
+    while win.tabs.count():
+        win.tabs.widget(0).mark_clean()
+        win.close_tab(0, create_replacement=False)
     win._really_quitting = True
     win.close()
     win.deleteLater()
@@ -168,3 +183,26 @@ def test_the_empty_day_cleanup_runs_once(window):
     path.write_text("", encoding="utf-8")
     window._prune_empty_daily_notes()
     assert path.exists()
+
+
+def test_a_day_note_replaces_the_blank_starting_tab(window):
+    """It used to open beside the empty "Untitled" the app starts with."""
+    assert [
+        window.tabs.tabText(i) for i in range(window.tabs.count())
+    ] == ["Untitled"]
+
+    window.open_daily_note(date(2026, 8, 27))
+
+    assert [
+        window.tabs.tabText(i) for i in range(window.tabs.count())
+    ] == ["1405-06-05.md"]
+
+
+def test_a_day_note_does_not_displace_a_tab_you_were_using(window):
+    """Only an untouched blank tab is a placeholder."""
+    window.current_document().editor.insertPlainText("چیزی که نوشته‌ام")
+    window.open_daily_note(date(2026, 8, 27))
+
+    names = [window.tabs.tabText(i) for i in range(window.tabs.count())]
+    assert "1405-06-05.md" in names
+    assert len(names) == 2

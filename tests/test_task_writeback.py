@@ -25,9 +25,12 @@ def window(qapp, tmp_path, monkeypatch):
     win._cfg["notes_root"] = str(notes)
     yield win
     # A tab with unsaved edits raises a modal "save changes?" prompt on
-    # close, which in a headless run blocks the test session outright.
-    for index in range(win.tabs.count()):
-        win.tabs.widget(index).mark_clean()
+    # close, which in a headless run blocks the session outright. Each tab
+    # is marked clean immediately before it is closed, not all of them up
+    # front, so nothing running in between can dirty one again.
+    while win.tabs.count():
+        win.tabs.widget(0).mark_clean()
+        win.close_tab(0, create_replacement=False)
     win._really_quitting = True
     win.close()
     win.deleteLater()

@@ -85,7 +85,7 @@ log = logging.getLogger(__name__)
 TAB_DOT_SIZE = 6
 
 APP_TITLE = "Notepad Plus"
-APP_VERSION = "4.1.2"
+APP_VERSION = "4.1.3"
 
 # Line endings, as characters rather than an escape.
 NEWLINE_CHARS = chr(13) + chr(10)
@@ -1181,10 +1181,15 @@ class MainWindow(QMainWindow):
         if not path.exists():
             existing = self._tab_for_pending(str(path))
             if existing is None:
+                # Same courtesy open_file does: a blank untouched tab is a
+                # placeholder, not a document, so the day takes its place
+                # instead of appearing beside a stray "Untitled".
+                placeholder = self._placeholder_tab()
                 self._make_document(
                     text=daily_notes.starter_text(when),
                     pending_path=str(path),
                 )
+                self._discard_placeholder(placeholder)
             else:
                 self.tabs.setCurrentWidget(existing)
         elif not self.open_file(str(path)):

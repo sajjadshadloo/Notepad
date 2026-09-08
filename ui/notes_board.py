@@ -4,7 +4,7 @@ The folder is the category. That was chosen over a tag field because a tag
 has to be maintained by hand and a folder maintains itself — you already move
 files in Explorer, and 3.0's tags were abandoned for exactly this reason.
 """
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -21,22 +21,6 @@ from ui.note_cards import NoteCardGrid
 ALL_LABEL = "همه"
 
 
-class _LibraryWorker(QThread):
-    """Reading every note is a disk walk, so it never runs on the UI thread."""
-
-    loaded = pyqtSignal(list)
-
-    def __init__(self, root: str, parent=None):
-        super().__init__(parent)
-        self._root = root
-
-    def run(self):
-        try:
-            self.loaded.emit(load_library(self._root))
-        except Exception:
-            self.loaded.emit([])
-
-
 class NotesBoard(QWidget):
     note_activated = pyqtSignal(str)
     new_note_requested = pyqtSignal()
@@ -49,7 +33,6 @@ class NotesBoard(QWidget):
         self._root = root
         self._cards: list = []
         self._category = ALL_LABEL
-        self._worker: _LibraryWorker | None = None
 
         column = QVBoxLayout(self)
         column.setContentsMargins(18, 14, 18, 16)
@@ -96,11 +79,16 @@ class NotesBoard(QWidget):
         self.reload()
 
     def reload(self):
-        if self._worker is not None and self._worker.isRunning():
-            return
-        self._worker = _LibraryWorker(self._root, self)
-        self._worker.loaded.connect(self._show)
-        self._worker.start()
+        """Re-read the folder. Deliberately on the UI thread.
+
+        This began as a QThread, on the assumption that a disk walk needs
+        one. Measured, the real folder takes 2.8 ms — and the thread cost
+        two crashes: destroying the board while it ran was an access
+        violation, and keeping it alive hung the process at exit. A folder
+        of 500 notes would take ~165 ms, which is the point at which this
+        should move off the thread again; a folder of 23 is not.
+        """
+        self._show(load_library(self._root))
 
     def _show(self, cards: list):
         self._cards = cards
