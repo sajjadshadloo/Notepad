@@ -72,6 +72,7 @@ class TopBar(QWidget):
     tasks_requested = pyqtSignal()
     theme_toggled = pyqtSignal()
     settings_requested = pyqtSignal()
+    sync_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -216,6 +217,15 @@ class TopBar(QWidget):
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(2)
         row.addStretch(1)
+
+        self.sync_button = QToolButton()
+        self.sync_button.setObjectName("syncButton")
+        self.sync_button.setText("همگام‌سازی…")
+        self.sync_button.setToolTip("نمایش وضعیت و اجرای همگام‌سازی")
+        self.sync_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.sync_button.setFixedHeight(BUTTON_SIZE)
+        self.sync_button.clicked.connect(self.sync_requested)
+        row.addWidget(self.sync_button)
 
         # The tasks button carries the open count, so it is the one button
         # here that is wider than a square.

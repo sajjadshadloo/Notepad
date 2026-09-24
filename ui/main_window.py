@@ -1,5 +1,6 @@
 import logging
 import os
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -44,6 +45,7 @@ from core import task_file, trash
 import core.note_index as note_index
 import core.settings_manager as settings_manager
 from core.external_change_monitor import ExternalChangeMonitor
+from ui.cloud_sync_worker import CloudSyncWorker
 from core.jalali import to_persian_digits
 from core.tasks import parse_document, parse_task
 from core.tasks import set_stamp, shift_stamp
@@ -85,7 +87,7 @@ log = logging.getLogger(__name__)
 TAB_DOT_SIZE = 6
 
 APP_TITLE = "Notepad Plus"
-APP_VERSION = "4.2.3"
+APP_VERSION = "4.2.4"
 
 # Line endings, as characters rather than an escape.
 NEWLINE_CHARS = chr(13) + chr(10)
@@ -452,6 +454,12 @@ class MainWindow(QMainWindow):
         self._build_menus()
         self._build_format_bar()
         self._build_ui()
+        self._sync_worker: CloudSyncWorker | None = None
+        self._read_sync_status()
+        self._sync_timer = QTimer(self, interval=60_000)
+        self._sync_timer.timeout.connect(self._sync_tick)
+        self._sync_timer.start()
+        QTimer.singleShot(1500, self._sync_tick)
         self._restore_geometry()
 
         self._recovery_timer = QTimer(self, interval=10_000)
@@ -885,6 +893,7 @@ class MainWindow(QMainWindow):
         self.top_bar.settings_requested.connect(self.show_settings)
         self.top_bar.widget_toggled.connect(self.toggle_day_widget)
         self.top_bar.page_requested.connect(self.show_page)
+        self.top_bar.sync_requested.connect(self.sync_now)
 
         shell = QWidget()
         column = QVBoxLayout(shell)
@@ -1861,6 +1870,82 @@ class MainWindow(QMainWindow):
         self.notes_board.set_root(folder)
         if self._tasks_watcher is not None:
             self._tasks_watcher.set_root(folder)
+        self.sync_now()
+
+    def _read_sync_status(self):
+        path = settings_manager.app_data_dir() / "cloud_sync_status.json"
+        if not path.exists():
+            self.top_bar.sync_button.setText("همگام: نامشخص")
+            self.top_bar.sync_button.setToolTip("هنوز گزارشی ثبت نشده؛ برای بررسی کلیک کن.")
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            checked = datetime.fromisoformat(data["checked_at"]).astimezone()
+            if data["state"] == "error":
+                title = "خطای همگام"
+            elif data["state"] == "attention":
+                title = "نیاز به بررسی"
+            else:
+                title = "همگام: " + to_persian_digits(checked.strftime("%H:%M"))
+            self.top_bar.sync_button.setText(title)
+            self.top_bar.sync_button.setToolTip(
+                "آخرین بررسی: " + checked.strftime("%Y-%m-%d %H:%M")
+                + f"\nتعارض: {data.get('conflicts', 0)} · فایل در انتظار: {data.get('skipped', 0)}"
+                + ("\n" + data["error"] if data.get("error") else "")
+                + "\nبرای همگام‌سازی دوباره کلیک کن.")
+            return checked
+        except (OSError, ValueError, KeyError, TypeError):
+            self.top_bar.sync_button.setText("همگام: نامشخص")
+            return None
+
+    def _sync_tick(self):
+        checked = self._read_sync_status()
+        if checked is None or (datetime.now().astimezone() - checked).total_seconds() > 90:
+            self.sync_now()
+
+    def sync_now(self):
+        if self._closing_application or (self._sync_worker and self._sync_worker.isRunning()):
+            return
+        config_file = settings_manager.app_data_dir() / "cloud_sync.json"
+        try:
+            config = json.loads(config_file.read_text(encoding="utf-8"))
+            if not config.get("enabled"):
+                self.top_bar.sync_button.setText("همگام‌سازی خاموش")
+                return
+            protected = {tab.path for index in range(self.tabs.count())
+                         if (tab := self.tabs.widget(index)).path}
+            self._sync_worker = CloudSyncWorker(
+                self._cfg["notes_root"], settings_manager.app_data_dir() / "cloud_sync_state.json",
+                config["url"], config["key"], protected, self)
+            worker = self._sync_worker
+            worker.completed.connect(self._sync_finished)
+            worker.finished.connect(worker.deleteLater)
+            worker.finished.connect(lambda: self._clear_sync_worker(worker))
+            self.top_bar.sync_button.setText("در حال همگام…")
+            worker.start()
+        except (OSError, ValueError, KeyError) as exc:
+            self.top_bar.sync_button.setText("همگام: نامشخص")
+            self.top_bar.sync_button.setToolTip(f"تنظیم همگام‌سازی پیدا نشد: {exc}")
+
+    def _sync_finished(self, result, error: str):
+        if self._closing_application:
+            return
+        self._read_sync_status()
+        if error:
+            self.statusBar().showMessage(f"همگام‌سازی انجام نشد: {error}", 10000)
+            return
+        if result.downloaded or result.uploaded or result.deleted:
+            self.notes_board.reload()
+            self._notify_tasks_changed()
+        if result.conflicts:
+            self.statusBar().showMessage(f"تعارض همگام‌سازی: {result.conflicts}", 10000)
+        elif result.skipped:
+            self.statusBar().showMessage(
+                f"{result.skipped} فایل باز یا تغییرکرده در انتظار است.", 8000)
+
+    def _clear_sync_worker(self, worker):
+        if self._sync_worker is worker:
+            self._sync_worker = None
 
     def set_theme(self, theme: str):
         self._cfg["theme"] = theme
