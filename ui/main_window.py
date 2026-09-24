@@ -1492,6 +1492,9 @@ class MainWindow(QMainWindow):
         if tab is None:
             self._file_monitor.unwatch(path)
             return
+        if not tab.modified:
+            self._reload_document_from_disk(tab)
+            return
         self.tabs.setCurrentWidget(tab)
 
         box = QMessageBox(self)
@@ -1913,7 +1916,7 @@ class MainWindow(QMainWindow):
                 self.top_bar.sync_button.setText("همگام‌سازی خاموش")
                 return
             protected = {tab.path for index in range(self.tabs.count())
-                         if (tab := self.tabs.widget(index)).path}
+                         if (tab := self.tabs.widget(index)).path and tab.modified}
             self._sync_worker = CloudSyncWorker(
                 self._cfg["notes_root"], settings_manager.app_data_dir() / "cloud_sync_state.json",
                 config["url"], config["key"], protected, self)

@@ -84,6 +84,25 @@ def test_main_window_watches_and_reloads_open_document(tmp_path, qapp, monkeypat
     window.close()
 
 
+def test_clean_open_document_reloads_without_a_prompt(tmp_path, qapp, monkeypatch):
+    monkeypatch.setenv("NOTEPAD_DATA_DIR", str(tmp_path / "appdata"))
+    path = tmp_path / "note.md"
+    path.write_text("- [ ] task", encoding="utf-8")
+    window = MainWindow([str(path)])
+    window._recovery_timer.stop()
+    window._sync_timer.stop()
+    tab = window.current_document()
+
+    path.write_text("- [x] task", encoding="utf-8")
+    window._external_file_changed(str(path))
+
+    assert tab.text == "- [x] task"
+    assert not tab.modified
+    window._closing_application = True
+    window.close_tab(window.tabs.indexOf(tab), create_replacement=False)
+    window.close()
+
+
 def test_app_save_is_acknowledged_as_current_disk_version(tmp_path, qapp, monkeypatch):
     monkeypatch.setenv("NOTEPAD_DATA_DIR", str(tmp_path / "appdata"))
     path = tmp_path / "note.txt"
