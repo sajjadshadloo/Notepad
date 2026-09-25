@@ -87,7 +87,7 @@ log = logging.getLogger(__name__)
 TAB_DOT_SIZE = 6
 
 APP_TITLE = "Notepad Plus"
-APP_VERSION = "4.2.4"
+APP_VERSION = "4.2.5"
 
 # Line endings, as characters rather than an escape.
 NEWLINE_CHARS = chr(13) + chr(10)
@@ -2162,10 +2162,22 @@ class MainWindow(QMainWindow):
         self.activateWindow()
         self._offer_recovery()
         QTimer.singleShot(250, self._offer_legacy_migration)
+        self._rename_legacy_tasks_file()
         self._import_legacy_daily_notes()
         self._start_task_watcher()
         if self._cfg.get("day_widget"):
             self._show_day_widget()
+
+    def _rename_legacy_tasks_file(self):
+        """کارها.md became tasks.md in 4.2.5. Left alone while it is open,
+        so a tab never ends up pointing at a file that is no longer there."""
+        root = self._cfg["notes_root"]
+        if self._tab_for_path(str(Path(root) / task_file.LEGACY_NAME)):
+            return
+        try:
+            task_file.rename_legacy_file(root)
+        except OSError:
+            log.warning("Could not rename the tasks file", exc_info=True)
 
     def _import_legacy_daily_notes(self):
         """Fold a 4.1 Daily folder into the one tasks file — once.

@@ -21,13 +21,29 @@ from core.tasks import parse_task, set_stamp, stamp_span
 
 log = logging.getLogger(__name__)
 
-FILE_NAME = "کارها.md"
+FILE_NAME = "tasks.md"
+# 4.2.4 and earlier called it کارها.md. File names in the notes folder are
+# English now, so agents and scripts can find the file without guessing.
+LEGACY_NAME = "کارها.md"
 LEGACY_FOLDER = "Daily"
 NEWLINE = chr(10)
 
 
 def path_for(root: str | Path) -> Path:
     return Path(root) / FILE_NAME
+
+
+def rename_legacy_file(root: str | Path) -> bool:
+    """Give a 4.2.4 کارها.md its new name. True when it moved.
+
+    When both names exist, neither is touched: merging two task lists is a
+    decision the user makes, not one to take silently on launch.
+    """
+    old, new = Path(root) / LEGACY_NAME, path_for(root)
+    if not old.is_file() or new.exists():
+        return False
+    old.rename(new)
+    return True
 
 
 def add_task(root: str | Path, day: date, text: str) -> Path:

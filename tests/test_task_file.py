@@ -18,8 +18,27 @@ def _tasks_in(path):
 
 def test_the_file_is_created_on_the_first_task(tmp_path):
     path = task_file.add_task(tmp_path, date(2026, 8, 27), "فاکتور مروارید")
-    assert path.name == "کارها.md"
+    assert path.name == "tasks.md"
     assert [t.text for t in _tasks_in(path)] == ["فاکتور مروارید"]
+
+
+def test_the_old_persian_name_is_renamed(tmp_path):
+    (tmp_path / "کارها.md").write_text("- [ ] کار قدیمی\n", encoding="utf-8")
+    assert task_file.rename_legacy_file(tmp_path)
+    assert not (tmp_path / "کارها.md").exists()
+    assert "کار قدیمی" in task_file.path_for(tmp_path).read_text(encoding="utf-8")
+
+
+def test_both_names_existing_are_left_alone(tmp_path):
+    (tmp_path / "کارها.md").write_text("- [ ] قدیمی\n", encoding="utf-8")
+    task_file.path_for(tmp_path).write_text("- [ ] جدید\n", encoding="utf-8")
+    assert not task_file.rename_legacy_file(tmp_path)
+    assert (tmp_path / "کارها.md").exists()
+    assert "جدید" in task_file.path_for(tmp_path).read_text(encoding="utf-8")
+
+
+def test_nothing_to_rename_is_not_an_error(tmp_path):
+    assert not task_file.rename_legacy_file(tmp_path)
 
 
 def test_a_task_carries_the_day_it_was_added_to(tmp_path):

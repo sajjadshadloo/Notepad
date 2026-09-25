@@ -207,14 +207,14 @@ def test_opening_the_tasks_file_switches_to_the_editor(window):
     window.open_tasks_file()
 
     assert window.pages.currentIndex() == window.PAGE_INDEX["editor"]
-    assert window.current_document().display_name == "کارها.md"
+    assert window.current_document().display_name == "tasks.md"
 
 
 def test_the_tasks_file_opens_even_before_it_exists(window):
     """Nothing is written until you save — the same as a new document."""
     window.open_tasks_file()
     tab = window.current_document()
-    assert tab.display_name == "کارها.md"
+    assert tab.display_name == "tasks.md"
     assert tab.path is None
     assert not task_file.path_for(window._cfg["notes_root"]).exists()
 
