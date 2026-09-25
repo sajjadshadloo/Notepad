@@ -1,0 +1,18 @@
+{
+  "name": "notepad-plus-bot",
+  "main": "src/worker.mjs",
+  "compatibility_date": "2026-09-24",
+  "assets": {
+    "directory": "./public"
+  },
+  "triggers": {
+    "crons": ["*/15 * * * *"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "notepad-plus-data",
+      "database_id": "ea1017ba-494b-461c-83e8-d38d56987d2e"
+    }
+  ]
+}

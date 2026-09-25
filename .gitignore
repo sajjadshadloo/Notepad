@@ -20,6 +20,10 @@ desktop.ini
 
 # Test / smoke artifacts
 .smoke-data/
+.worktrees/
 .test-tmp-managed2/
+.wrangler/
+cloudflare/node_modules/
+cloudflare/.dev.vars*
 .tmp-py310-deps/
 .gutter-check.png
