@@ -59,11 +59,11 @@ def test_a_cards_task_loses_its_date_stamp(tmp_path):
 
 
 def test_the_open_count_covers_the_whole_note_not_the_preview(tmp_path):
-    """The preview stops at six rows; the badge must not stop with it."""
+    """The v4 card shows four tasks; the badge must not stop with it."""
     body = "".join("- [ ] کار %d\n" % index for index in range(20))
     _write(tmp_path, "a.md", body + "- [x] تمام‌شده\n")
     card = load_library(tmp_path)[0]
-    assert len(card.tasks) == 6
+    assert len(card.tasks) == 4
     assert card.open_tasks == 20
 
 
@@ -71,14 +71,22 @@ def test_a_long_note_is_only_read_as_far_as_the_preview_needs(tmp_path):
     """A 39 KB note exists in the real folder; the card reads its head."""
     text = "# عنوان\n\n" + ("خط پرحرف\n" * 5000)
     card = summarise(text, tmp_path / "big.md", "", 0.0)
-    assert len(card.lines) == 4
+    assert len(card.lines) == 3
 
 
 # Categories
 
 def test_a_subfolder_becomes_a_category(tmp_path):
-    _write(tmp_path, "Daily/1405-06-05.md", "- [ ] کار\n")
-    assert load_library(tmp_path)[0].category == "Daily"
+    _write(tmp_path, "Work/1405-06-05.md", "- [ ] کار\n")
+    assert load_library(tmp_path)[0].category == "Work"
+
+
+def test_english_folder_names_show_in_persian(tmp_path):
+    """Folders are named in English on disk (for agents); the app reads them
+    in Persian."""
+    _write(tmp_path, "Inbox/a.md", "متن\n")
+    _write(tmp_path, "Projects/b.md", "متن\n")
+    assert {card.category for card in load_library(tmp_path)} == {"پروژه‌ها", "ورودی‌ها"}
 
 
 def test_a_note_in_the_root_gets_the_default_category(tmp_path):
@@ -95,8 +103,8 @@ def test_only_the_first_folder_level_is_a_category(tmp_path):
 def test_the_root_category_leads_and_the_rest_are_sorted(tmp_path):
     _write(tmp_path, "z.md", "متن\n")
     _write(tmp_path, "Work/a.md", "متن\n")
-    _write(tmp_path, "Archive/a.md", "متن\n")
-    assert categories(load_library(tmp_path)) == [ROOT_LABEL, "Archive", "Work"]
+    _write(tmp_path, "Clients/a.md", "متن\n")
+    assert categories(load_library(tmp_path)) == [ROOT_LABEL, "Clients", "Work"]
 
 
 def test_the_root_category_is_absent_when_nothing_is_loose(tmp_path):

@@ -1621,7 +1621,14 @@ class MainWindow(QMainWindow):
         if on:
             self.focus_pill.show_pill()
         else:
-            self.focus_pill.hide()
+            self.focus_pill.hide_pill()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        for name in ("palette_overlay", "settings_overlay", "quick_capture", "review"):
+            overlay = getattr(self, name, None)
+            if overlay is not None:
+                overlay.window_resized()
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape and getattr(self, "_focus", False):

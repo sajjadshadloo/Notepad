@@ -58,46 +58,36 @@ def test_choosing_a_folder_narrows_the_cards(qapp, notes):
     board.deleteLater()
 
 
-def test_one_folder_alone_hides_the_tabs(qapp, tmp_path):
-    """"همه" plus a single category is two buttons saying the same thing.
-
-    Shown before asserting: isVisible() is False for any widget that was
-    never shown, so an unshown board would pass this without meaning it.
-    """
-    root = tmp_path / "notes"
-    root.mkdir()
-    (root / "a.md").write_text("متن\n", encoding="utf-8")
-    board = NotesBoard(str(root))
+def test_the_home_view_switches_between_cards_and_a_list(qapp, notes):
+    """The design's grid/list toggle: the same notes, two layouts."""
+    board = NotesBoard(str(notes))
     board.show()
-    board._show(load_library(root))
+    board._show(load_library(notes))
+    board.set_view("list")
     qapp.processEvents()
-    assert not board._tabs_holder.isVisible()
-
-    (root / "Work").mkdir()
-    (root / "Work" / "b.md").write_text("متن\n", encoding="utf-8")
-    board._show(load_library(root))
+    assert board.list.isVisible() and not board.grid.isVisible()
+    board.set_view("grid")
     qapp.processEvents()
-    assert board._tabs_holder.isVisible()
+    assert board.grid.isVisible() and not board.list.isVisible()
     board.close()
     board.deleteLater()
 
 
-def test_an_empty_folder_says_so_instead_of_showing_a_blank_grid(qapp, tmp_path):
+def test_pinned_notes_come_first(qapp, notes):
+    board = NotesBoard(str(notes))
+    board._show(load_library(notes))
+    pinned = next(c.path for c in board.shown_cards() if c.title == "b")
+    board.set_pinned([pinned])
+    assert board.card_titles()[0] == "b"
+    board.deleteLater()
+
+
+def test_an_empty_folder_shows_no_cards(qapp, tmp_path):
     root = tmp_path / "empty"
     root.mkdir()
     board = NotesBoard(str(root))
-    board.show()
     board._show([])
-    qapp.processEvents()
-    assert board._empty.isVisible()
-    assert not board.grid.isVisible()
-
-    (root / "a.md").write_text("متن\n", encoding="utf-8")
-    board._show(load_library(root))
-    qapp.processEvents()
-    assert board.grid.isVisible()
-    assert not board._empty.isVisible()
-    board.close()
+    assert board.card_titles() == []
     board.deleteLater()
 
 
@@ -106,7 +96,7 @@ def test_opening_a_card_reports_its_path(qapp, notes):
     board._show(load_library(notes))
     seen = []
     board.note_activated.connect(seen.append)
-    board.grid._activate(board.grid.item(0))
+    board.grid.activate(0)
     assert seen and seen[0].endswith(".md")
     board.deleteLater()
 
@@ -145,7 +135,8 @@ def test_a_day_with_nothing_on_it_says_so(qapp, dated):
     view = TodayRail()
     view.set_tasks(scan_folder(str(dated)))
     view.show_day(date.today() + timedelta(days=5))
-    assert view.list.texts() == ["برای این روز کاری نیست"]
+    assert view.list.texts() == []
+    assert view.list.empty_text() == "برای این روز کاری نیست."
     view.deleteLater()
 
 
@@ -188,8 +179,8 @@ def test_moving_months_keeps_the_tasks(qapp, dated):
 def test_a_day_carrying_work_is_marked_on_the_month(qapp, dated):
     view = TodayRail()
     view.set_tasks(scan_folder(str(dated)))
-    assert date.today() in view.calendar._marked
-    assert date.today() + timedelta(days=1) not in view.calendar._marked
+    assert date.today() in view.calendar._busy
+    assert date.today() + timedelta(days=1) not in view.calendar._busy
     view.deleteLater()
 
 

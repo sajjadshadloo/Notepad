@@ -98,12 +98,19 @@ class Card(QWidget):
     def __init__(self, fill: str = "surface", radius: float = 16, parent=None):
         super().__init__(parent)
         self._fill, self._radius = fill, radius
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(60)
-        shadow.setOffset(0, 24)
-        shadow.setColor(QColor(0, 0, 0, 115))
-        self.setGraphicsEffect(shadow)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+
+    def set_shadow(self, on: bool):
+        """Attached only while the card is on screen: an effect on a hidden
+        widget costs nothing but can outlive its owner at teardown."""
+        if on and self.graphicsEffect() is None:
+            shadow = QGraphicsDropShadowEffect(self)
+            shadow.setBlurRadius(60)
+            shadow.setOffset(0, 24)
+            shadow.setColor(QColor(0, 0, 0, 115))
+            self.setGraphicsEffect(shadow)
+        elif not on:
+            self.setGraphicsEffect(None)
 
     def paintEvent(self, _event):
         p = QPainter(self)
@@ -129,13 +136,13 @@ class Overlay(QWidget):
         self._modal_close = modal_close
         card.setParent(self)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        window.installEventFilter(self)
         self.hide()
 
-    def eventFilter(self, obj, event):
-        if obj is self._window and event.type() == QEvent.Type.Resize and self.isVisible():
+    def window_resized(self):
+        """Called by the main window's resizeEvent — no event filter on it,
+        which Qt would still call into while the window is being destroyed."""
+        if self.isVisible():
             self._place()
-        return False
 
     def _place(self):
         self.setGeometry(self._window.rect())
@@ -148,6 +155,7 @@ class Overlay(QWidget):
 
     def open(self):
         self._place()
+        self.card.set_shadow(True)
         self.show()
         self.raise_()
         self.setFocus()
@@ -159,6 +167,7 @@ class Overlay(QWidget):
     def close_overlay(self):
         if self.isVisible():
             self.hide()
+            self.card.set_shadow(False)
             self.closed.emit()
 
     def paintEvent(self, _event):
@@ -1289,15 +1298,14 @@ class Toast(QWidget):
         self._window = window
         self._text = ""
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(30)
-        shadow.setOffset(0, 12)
-        shadow.setColor(QColor(0, 0, 0, 90))
-        self.setGraphicsEffect(shadow)
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
-        self._timer.timeout.connect(self.hide)
+        self._timer.timeout.connect(self._vanish)
         self.hide()
+
+    def _vanish(self):
+        self.hide()
+        self.setGraphicsEffect(None)
 
     def flash(self, text: str):
         self._text = text
@@ -1308,6 +1316,12 @@ class Toast(QWidget):
         self.setGeometry((self._window.width() - width - margin) // 2,
                          self._window.height() - 24 - height - margin // 2,
                          width + margin, height + margin)
+        if self.graphicsEffect() is None:
+            shadow = QGraphicsDropShadowEffect(self)
+            shadow.setBlurRadius(30)
+            shadow.setOffset(0, 12)
+            shadow.setColor(QColor(0, 0, 0, 90))
+            self.setGraphicsEffect(shadow)
         self.show()
         self.raise_()
         self.update()
@@ -1348,22 +1362,31 @@ class FocusPill(QWidget):
         button.clicked.connect(self.exit_requested)
         row.addWidget(button)
         self._width = round(14 + text_width("حالت تمرکز", f) + 10 + button.width() + 6)
-        self._opacity = QGraphicsOpacityEffect(self)
-        self._opacity.setOpacity(0.75)
-        self.setGraphicsEffect(self._opacity)
         self.hide()
 
     def show_pill(self):
         self.setGeometry((self._window.width() - self._width) // 2, 16, self._width, 34)
+        opacity = QGraphicsOpacityEffect(self)
+        opacity.setOpacity(0.75)
+        self.setGraphicsEffect(opacity)
         self.show()
         self.raise_()
 
+    def hide_pill(self):
+        self.hide()
+        self.setGraphicsEffect(None)
+
+    def _set_opacity(self, value: float):
+        effect = self.graphicsEffect()
+        if effect is not None:
+            effect.setOpacity(value)
+
     def enterEvent(self, event):
-        self._opacity.setOpacity(1.0)
+        self._set_opacity(1.0)
         super().enterEvent(event)
 
     def leaveEvent(self, event):
-        self._opacity.setOpacity(0.75)
+        self._set_opacity(0.75)
         super().leaveEvent(event)
 
     def paintEvent(self, _event):

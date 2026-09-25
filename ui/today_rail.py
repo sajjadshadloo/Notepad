@@ -76,6 +76,20 @@ class ProgressBar(QWidget):
         p.end()
 
 
+class _FocusEdit(QLineEdit):
+    """A line edit that says when it gains or loses focus (for the border)."""
+
+    focus_changed = pyqtSignal()
+
+    def focusInEvent(self, event):
+        super().focusInEvent(event)
+        self.focus_changed.emit()
+
+    def focusOutEvent(self, event):
+        super().focusOutEvent(event)
+        self.focus_changed.emit()
+
+
 class QuickAddField(QWidget):
     """The 40px well with a + on the right, the field, and «Enter» on the left."""
 
@@ -92,7 +106,8 @@ class QuickAddField(QWidget):
         row = QHBoxLayout(self)
         enter_w = (text_width("Enter", font(10, mono=True)) + gap) if show_enter else 0
         row.setContentsMargins(round(pad + enter_w), 0, round(pad + icon_size + gap), 0)
-        self.edit = QLineEdit()
+        self.edit = _FocusEdit()
+        self.edit.focus_changed.connect(self.update)
         self.edit.setObjectName("quickAddEdit")
         self.edit.setPlaceholderText(placeholder)
         self.edit.setFont(font(px))
@@ -102,7 +117,6 @@ class QuickAddField(QWidget):
                                | Qt.AlignmentFlag.AlignVCenter)
         self.edit.returnPressed.connect(self._submit)
         self.edit.textChanged.connect(self.text_changed)
-        self.edit.installEventFilter(self)
         row.addWidget(self.edit)
         self._style_edit()
 
@@ -116,13 +130,22 @@ class QuickAddField(QWidget):
             f" selection-color: {t['on_accent']}; }}"
         )
 
-    def eventFilter(self, obj, event):
-        if obj is self.edit and event.type() in (event.Type.FocusIn, event.Type.FocusOut):
-            self.update()
-        return False
-
     def set_placeholder(self, text: str):
         self.edit.setPlaceholderText(text)
+
+    # The QLineEdit surface callers and tests use.
+    def setText(self, text: str):  # noqa: N802
+        self.edit.setText(text)
+
+    def text(self) -> str:
+        return self.edit.text()
+
+    def placeholderText(self) -> str:  # noqa: N802
+        return self.edit.placeholderText()
+
+    @property
+    def returnPressed(self):  # noqa: N802
+        return self.edit.returnPressed
 
     def _submit(self):
         text = self.edit.text().strip()
@@ -322,6 +345,9 @@ class DayList(QWidget):
     # Helpers for tests and callers
     def texts(self) -> list[str]:
         return [row["text"] for row in self._rows if row["kind"] == "task"]
+
+    def empty_text(self) -> str:
+        return next((row["text"] for row in self._rows if row["kind"] == "empty"), "")
 
 
 class MiniCalendar(QWidget):
@@ -631,7 +657,14 @@ class TodayRail(QWidget):
 
     # Actions
 
-    def _submit(self, text: str):
+    def _submit(self, text: str | None = None):
+        if text is None:
+            # Called directly (Enter reaches here through the field's own
+            # signal with the text already taken).
+            text = self.input.text().strip()
+            self.input.edit.clear()
+            if not text:
+                return
         found = parse_when(text)
         day = found.day if found else self._day
         body = found.text if found else text

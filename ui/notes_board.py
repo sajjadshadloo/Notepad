@@ -187,6 +187,11 @@ class CardGrid(QWidget):
     def titles(self) -> list[str]:
         return [card.title for card in self._cards]
 
+    def activate(self, index: int):
+        """Open the card at `index`, as a click on it would."""
+        if 0 <= index < len(self._cards):
+            self.note_activated.emit(self._cards[index].path)
+
     # Geometry
 
     def _columns(self, width: float) -> tuple[int, float]:

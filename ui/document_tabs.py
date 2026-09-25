@@ -41,7 +41,8 @@ class DocumentTabs(QWidget):
         self._bar.setUsesScrollButtons(False)
         self._row = QHBoxLayout(self)
         self._row.setContentsMargins(0, 0, 0, 0)
-        self._row.setSpacing(0)
+        # The design's 4px gap between the last tab and the +.
+        self._row.setSpacing(4)
         self._row.addWidget(self._bar, 0)
         new_button = getattr(self._bar, "new_button", None)
         if new_button is not None:

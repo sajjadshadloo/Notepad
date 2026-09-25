@@ -188,6 +188,10 @@ class SmartEditor(QTextEdit):
         frame = self.document().rootFrame()
         fmt = frame.frameFormat()
         if (fmt.topMargin(), fmt.bottomMargin(), fmt.leftMargin(), fmt.rightMargin()) != (top, bottom, 0, 0):
+            # A frame format change counts as an edit to Qt; it is layout,
+            # not content, so the document must not turn «unsaved» over it.
+            was_modified = self.document().isModified()
+            self._formatting = True
             self.document().setDocumentMargin(0)
             fmt = frame.frameFormat()
             fmt.setTopMargin(top)
@@ -195,6 +199,8 @@ class SmartEditor(QTextEdit):
             fmt.setLeftMargin(0)
             fmt.setRightMargin(0)
             frame.setFrameFormat(fmt)
+            self._formatting = False
+            self.document().setModified(was_modified)
         self._place_side_areas()
         if relayout and self.viewportMargins() != before:
             # QTextEdit wraps to the viewport width only when it is resized

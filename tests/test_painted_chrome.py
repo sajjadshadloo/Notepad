@@ -34,6 +34,9 @@ def window(tmp_path, monkeypatch, qapp):
     for index in range(window.tabs.count()):
         window.tabs.widget(index).mark_clean()
     window.close()
+    # Destroyed now, not whenever the garbage collector gets to it: several
+    # shown windows collected together in a later test took Qt down.
+    window.deleteLater()
 
 
 def _colour_at(window, widget, dx: int, dy: int) -> str:
@@ -48,22 +51,23 @@ def tokens():
 
 
 def test_the_top_bar_paints_the_chrome_colour(window, qapp, tokens):
+    """v4: the top bar and the rail share the darkest band, `chrome`."""
     qapp.processEvents()
-    assert _colour_at(window, window.top_bar, 300, 6) == tokens["surface"]
+    assert _colour_at(window, window.top_bar, 330, 6) == tokens["chrome"]
 
 
-def test_the_tab_strip_paints_the_chrome_colour(window, qapp, tokens):
+def test_the_tab_strip_paints_the_panel_colour(window, qapp, tokens):
     """Not just under the tabs — the whole strip, or the QTabBar's own fill
     reads as a lighter box floating in it."""
     qapp.processEvents()
-    assert _colour_at(window, window.tabs, 600, 8) == tokens["surface"]
+    assert _colour_at(window, window.tab_strip, 20, 4) == tokens["panel"]
 
 
 def test_the_strip_matches_under_and_beside_the_tabs(window, qapp):
     qapp.processEvents()
-    beside = _colour_at(window, window.tabs, 600, 8)
-    far = _colour_at(window, window.tabs, 900, 8)
-    assert beside == far
+    near = _colour_at(window, window.tab_strip, 20, 4)
+    far = _colour_at(window, window.tab_strip, window.tab_strip.width() - 6, 3)
+    assert near == far
 
 
 def test_the_notes_board_paints_the_window_colour(window, qapp, tokens):

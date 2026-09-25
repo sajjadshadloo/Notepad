@@ -24,7 +24,11 @@ def test_live_markdown_hides_heading_and_bold_tokens(qapp):
     assert heading_marker.format.foreground().color().alpha() == 0
     assert heading_marker.format.fontPointSize() == 1.0
     heading_text = next(r for r in heading_formats if r.start == 2)
-    assert heading_text.format.foreground().style() == Qt.BrushStyle.NoBrush
+    # v4: headings take the full text colour; paragraphs keep the softer
+    # body grey the editor itself is set in.
+    from ui.styles import current_palette
+
+    assert heading_text.format.foreground().color().name() == current_palette()["text"]
 
     paragraph = heading.next()
     bold_markers = [
