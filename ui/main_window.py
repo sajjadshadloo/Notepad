@@ -1,7 +1,8 @@
 import logging
 import os
 import json
-from datetime import datetime
+import sys
+from datetime import date, datetime
 from pathlib import Path
 
 from PyQt6.QtCore import QByteArray, QPoint, QSize, Qt, QTimer, pyqtSignal
@@ -80,6 +81,7 @@ from ui.shortcuts_dialog import ShortcutsDialog
 from ui.day_widget import DayWidget
 from ui.today_rail import TodayRail
 from ui.notes_board import NotesBoard
+from ui.editor_chrome import DocumentTabBar, EditorStatus, FormatBar, LinksPanel, TabStrip
 from ui.folder_sidebar import FolderSidebar
 from ui.navigation_rail import NavigationRail
 from ui.tasks_workspace import TasksWorkspace
@@ -92,7 +94,7 @@ log = logging.getLogger(__name__)
 TAB_DOT_SIZE = 6
 
 APP_TITLE = "Notepad Plus"
-APP_VERSION = "4.2.6"
+APP_VERSION = "4.3.0"
 
 # Line endings, as characters rather than an escape.
 NEWLINE_CHARS = chr(13) + chr(10)
@@ -104,71 +106,55 @@ ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 WORD_COUNT_LIMIT = 200_000
 
 
-class DocumentTabBar(QTabBar):
-    """Tab bar with a browser-style New button beside the last document."""
-
-    new_requested = pyqtSignal()
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.new_button = QToolButton(self)
-        self.new_button.setObjectName("newTabButton")
-        self.new_button.setText("+")
-        self.new_button.setToolTip("New document  (Ctrl+N)")
-        self.new_button.setAccessibleName("New document")
-        self.new_button.setAutoRaise(True)
-        self.new_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.new_button.setFixedSize(34, 30)
-        self.new_button.clicked.connect(self.new_requested)
-
-    # The + is placed by the tab strip's layout (see DocumentTabs), not
-    # positioned by hand over the bar: computing its x from tabRect() put it
-    # on top of the last tab's close button whenever the bar had not settled.
-
-    def tabInserted(self, index: int):
-        """Give the new tab our own close button.
-
-        Qt's default is the platform style's close pixmap, which on Windows
-        is a red cross that reads as an error badge sitting in the tab. This
-        is the same stroke icon the rest of the chrome uses.
-        """
-        super().tabInserted(index)
-        button = QToolButton(self)
-        button.setObjectName("tabCloseButton")
-        button.setAutoRaise(True)
-        button.setCursor(Qt.CursorShape.PointingHandCursor)
-        button.setToolTip("Close tab  (Ctrl+W)")
-        button.setFixedSize(18, 18)
-        button.setIconSize(QSize(9, 9))
-        button.setIcon(icon("close", current_palette()["muted"], 9))
-        button.clicked.connect(
-            lambda _checked=False, b=button: self._close_from(b)
-        )
-        self.setTabButton(index, QTabBar.ButtonPosition.RightSide, button)
-
-    def _close_from(self, button):
-        """Which tab a close button belongs to, asked at click time.
-
-        Not captured when the button is made: tabs are movable, so an index
-        taken then goes stale the moment one is dragged.
-        """
-        for index in range(self.count()):
-            if self.tabButton(index, QTabBar.ButtonPosition.RightSide) is button:
-                self.tabCloseRequested.emit(index)
-                return
-
-    def refresh_close_icons(self):
-        """After a palette change, the icons are still the old colour."""
-        colour = current_palette()["muted"]
-        for index in range(self.count()):
-            button = self.tabButton(index, QTabBar.ButtonPosition.RightSide)
-            if button is not None:
-                button.setIcon(icon("close", colour, 9))
-
-
 def _app_icon() -> QIcon:
     icon_path = ASSETS_DIR / "icon.ico"
     return QIcon(str(icon_path)) if icon_path.exists() else QIcon()
+
+
+_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+_RUN_NAME = "NotepadPlus"
+
+
+def _startup_command() -> str:
+    """The packaged exe starts straight into the tray; a source run can't."""
+    exe = Path(sys.executable)
+    if getattr(sys, "frozen", False):
+        return f'"{exe}" --minimized'
+    return f'"{exe}" "{Path(__file__).resolve().parent.parent / "main.py"}" --minimized'
+
+
+def _run_at_startup_enabled() -> bool:
+    if sys.platform != "win32":
+        return False
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY) as key:
+            winreg.QueryValueEx(key, _RUN_NAME)
+        return True
+    except OSError:
+        return False
+
+
+def _set_run_at_startup(on: bool) -> bool:
+    """Add or remove the per-user Run entry. Only ever this app's own value."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
+            if on:
+                winreg.SetValueEx(key, _RUN_NAME, 0, winreg.REG_SZ, _startup_command())
+            else:
+                try:
+                    winreg.DeleteValue(key, _RUN_NAME)
+                except FileNotFoundError:
+                    pass
+        return True
+    except OSError:
+        log.warning("Could not change the startup entry", exc_info=True)
+        return False
 
 
 def _load_bundled_fonts():
@@ -411,6 +397,14 @@ class MainWindow(QMainWindow):
     def __init__(self, initial_files: list[str] | None = None):
         super().__init__()
         self._cfg = settings_manager.load()
+        # 4.3 measures the editor text in CSS pixels, as the design does
+        # (body 14.5px). The old default 14pt becomes the design's 14.5px;
+        # any other size keeps its look (1pt = 4/3px).
+        if self._cfg.get("font_size_unit") != "px":
+            old = float(self._cfg.get("font_size", 14))
+            self._cfg["font_size"] = 14.5 if old in (14, 14.5) else round(old * 4 / 3 * 2) / 2
+            self._cfg["font_size_unit"] = "px"
+            settings_manager.save(self._cfg)
         save_dir = settings_manager.resolve_save_dir(self._cfg)
         if not self._cfg.get("notes_root"):
             self._cfg["notes_root"] = str(save_dir)
@@ -784,63 +778,33 @@ class MainWindow(QMainWindow):
         help_menu.addAction(self.about_action)
 
     def _build_format_bar(self):
-        """Slim quick-access bar for formatting, like Windows Notepad's."""
-        bar = QToolBar("Formatting", self)
-        bar.setObjectName("formatBar")
-        bar.setMovable(False)
-        bar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
-        bold = self._action("B", self.bold_action.trigger)
-        bold.setToolTip("Bold  (Ctrl+B)")
-        bar.addAction(bold)
-        bar.addSeparator()
-        # Two of the three levels: a title and a section is what a note
-        # actually uses. Ctrl+3 still works, and so does the menu entry the
-        # command palette reads.
-        for level in (1, 2):
-            proxy = self._action(f"H{level}", self.heading_actions[level - 1].trigger)
-            proxy.setToolTip(f"Heading {level}  (Ctrl+{level})")
-            bar.addAction(proxy)
-        bar.addSeparator()
-        bullet = self._action("•", self.bullet_action.trigger)
-        bullet.setToolTip("Bullet list  (Ctrl+Shift+8)")
-        numbered = self._action("1.", self.numbered_action.trigger)
-        numbered.setToolTip("Numbered list  (Ctrl+Shift+7)")
-        todo = self._action("☑", self.todo_action.trigger)
-        todo.setToolTip("To-do list  (Ctrl+Shift+9)")
-        bar.addAction(bullet)
-        bar.addAction(numbered)
-        bar.addAction(todo)
-        bar.addSeparator()
-
-        # What turns a checkbox into something with a day.
-        stamp = self._action("@", self.stamp_action.trigger)
-        stamp.setToolTip("تاریخ این کار  (Ctrl+Shift+A)")
-        self._stamp_toolbar_action = stamp
-        bar.addAction(stamp)
-
-        # Find sits at the far end, away from the formatting cluster.
-        spacer = QWidget()
-        spacer.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
-        )
-        bar.addWidget(spacer)
-        find = self._action("Find", self.find_action.trigger)
-        find.setIcon(icon("search", current_palette()["muted"], 13))
-        find.setToolTip("Find and replace  (Ctrl+F)")
-        bar.addAction(find)
-        # Kept as a plain widget, not addToolBar(): the design puts this
-        # below the tab strip, and a QMainWindow toolbar can only go above
-        # the central widget.
-        bar.setFloatable(False)
+        """The design's format bar: B, two headings, list, task, date, link,
+        direction — and on the far side, focus mode and the links panel."""
+        bar = FormatBar()
+        bar.bold.connect(self.bold_action.trigger)
+        bar.heading.connect(lambda level: self.heading_actions[level - 1].trigger())
+        bar.bullets.connect(self.bullet_action.trigger)
+        bar.task.connect(self.todo_action.trigger)
+        bar.date.connect(self.stamp_action.trigger)
+        bar.link.connect(self.insert_note_link)
+        bar.direction.connect(self.toggle_document_direction)
+        bar.focus.connect(lambda: self.set_focus_mode(True))
+        bar.links_toggled.connect(self.set_links_panel_visible)
         self.format_bar = bar
-        self._find_toolbar_action = find
 
     def _build_ui(self):
+        # The links panel re-reads the note a moment after typing stops.
+        self._links_timer = QTimer(self, singleShot=True, interval=700)
+        self._links_timer.timeout.connect(self.refresh_links_panel)
         self.document_tab_bar = DocumentTabBar()
         self.tabs = DocumentTabs(self.document_tab_bar)
         self.document_tab_bar.new_requested.connect(self.new_document)
-        self.tabs.setTabsClosable(True)
+        # The painted tab draws and hit-tests its own ×; Qt's close buttons
+        # would sit on top of it.
+        self.tabs.setTabsClosable(False)
         self.tabs.setMovable(True)
+        self.document_tab_bar.set_modified_source(
+            lambda index: bool(self.tabs.widget(index) and self.tabs.widget(index).modified))
         self.tabs.setDocumentMode(True)
         self.tabs.setIconSize(QSize(TAB_DOT_SIZE, TAB_DOT_SIZE))
         self.tabs.tabCloseRequested.connect(self.close_tab)
@@ -850,26 +814,35 @@ class MainWindow(QMainWindow):
         tab_bar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         tab_bar.customContextMenuRequested.connect(self._show_tab_menu)
 
-        self.tabs.setCornerWidget(
-            self._build_today_meter(), Qt.Corner.TopRightCorner
-        )
+        # Today's progress lives in the «امروز» column in v4; the meter is
+        # built so the task watcher has somewhere to report, but not shown.
+        self._build_today_meter()
 
         self.notes_board = NotesBoard(self._cfg["notes_root"])
-        self.notes_board.set_sidebar_mode(True)
+        self.notes_board.set_pinned(self._cfg.get("pinned_notes", []))
+        self.notes_board.set_view(self._cfg.get("home_view", "grid"))
         self.notes_board.note_activated.connect(self.open_note_from_board)
         self.notes_board.note_delete_requested.connect(self.delete_note)
         self.notes_board.new_note_requested.connect(self.new_note_from_board)
+        self.notes_board.view_changed.connect(self._remember_home_view)
+        self.notes_board.pin_toggled.connect(self.toggle_pin)
 
         self.rail = TodayRail()
         self.rail.task_added.connect(self._add_day_task)
         self.rail.task_toggled.connect(self.set_task_done)
         self.rail.task_delete_requested.connect(self.delete_task)
         self.rail.task_opened.connect(self.open_task_in_editor)
-        self.rail.file_requested.connect(self.open_tasks_file)
+        self.rail.file_requested.connect(lambda: self.show_page("tasks"))
+        self.rail.added_elsewhere.connect(self.flash)
 
         self.folder_sidebar = FolderSidebar(self._cfg["notes_root"])
-        self.folder_sidebar.category_selected.connect(self.notes_board.show_category)
-        self.folder_sidebar.tasks_requested.connect(lambda: self.show_page("tasks"))
+        self.folder_sidebar.category_selected.connect(self._show_folder)
+        self.folder_sidebar.tasks_requested.connect(self.open_tasks_file)
+        self.folder_sidebar.index_requested.connect(
+            lambda: self.open_file(str(self.folder_sidebar.index_file()))
+            if self.folder_sidebar.index_file().exists() else None)
+        self.folder_sidebar.trash_requested.connect(self._open_recycle_bin)
+        self.folder_sidebar.new_folder_requested.connect(self.new_folder)
 
         # The full month owns dozens of widgets. Build it only when the user
         # first visits Tasks/Calendar so ordinary editor startup stays lean.
@@ -891,13 +864,44 @@ class MainWindow(QMainWindow):
         # The editor keeps its tab strip and format bar; they belong to it
         # and mean nothing on the home screen, so they live on this page
         # rather than in the window's own column.
-        editor_page = QWidget()
-        editor_column = QVBoxLayout(editor_page)
+        # The editor page: tabs, format bar, text and status in one column;
+        # the links panel beside it on the left.
+        self.tab_strip = TabStrip()
+        strip_row = QHBoxLayout(self.tab_strip)
+        strip_row.setContentsMargins(10, 0, 10, 0)
+        strip_row.setSpacing(4)
+        strip_row.addWidget(self.tabs)
+        self.tabs.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        self.tab_strip.setFixedHeight(44)
+        self.editor_status = EditorStatus()
+        self.editor_status.direction.clicked.connect(self.toggle_document_direction)
+        self.editor_status.format.clicked.connect(
+            lambda: self._popup_status_menu(self.editor_status.format, self.encoding_group.actions()))
+        self.editor_status.zoom.clicked.connect(self.reset_zoom)
+
+        editor_column_widget = QWidget()
+        editor_column = QVBoxLayout(editor_column_widget)
         editor_column.setContentsMargins(0, 0, 0, 0)
         editor_column.setSpacing(0)
-        editor_column.addWidget(self.tabs)
+        editor_column.addWidget(self.tab_strip)
         editor_column.addWidget(self.format_bar)
         editor_column.addWidget(self.tabs.pages, 1)
+        editor_column.addWidget(self.editor_status)
+
+        self.links_panel = LinksPanel()
+        self.links_panel.open_requested.connect(self.open_note_from_board)
+        self.links_panel.create_requested.connect(self._create_linked_note)
+        editor_page = QWidget()
+        editor_row = QHBoxLayout(editor_page)
+        editor_row.setContentsMargins(0, 0, 0, 0)
+        editor_row.setSpacing(0)
+        editor_row.setDirection(QBoxLayout.Direction.RightToLeft)
+        editor_row.addWidget(editor_column_widget, 1)
+        editor_row.addWidget(self.links_panel)
+        links_on = self._cfg.get("links_panel", True)
+        self.links_panel.setVisible(links_on)
+        self.format_bar.set_links_visible(links_on)
+        self.editor_chrome = (self.tab_strip, self.format_bar, self.editor_status)
 
         self.pages = QStackedWidget()
         self.pages.addWidget(home)
@@ -932,48 +936,15 @@ class MainWindow(QMainWindow):
         body_row.addWidget(self.pages, 1)
         column.addWidget(body, 1)
         self.setCentralWidget(shell)
+        self._build_overlays()
 
-        # Save state leads on the left, where the eye lands first — it is the
-        # one thing here you might need to act on. Counts and the three
-        # pickers sit right, out of the way until wanted.
-        self.saved_label = QLabel()
-        self.saved_label.setObjectName("savedLabel")
-        self.cursor_label = QLabel("Ln 1, Col 1")
-        self.cursor_label.setObjectName("statusLabel")
-        self.statusBar().addWidget(self.saved_label)
-        self.statusBar().addWidget(self.cursor_label)
-
-        self.count_label = QLabel("0 characters")
-        self.count_label.setObjectName("statusLabel")
-        self.statusBar().addPermanentWidget(self.count_label)
-
-        # Encoding and direction are clickable chips: one click opens the
-        # picker right above the status bar.
-        self.encoding_button = QPushButton("UTF-8")
-        self.encoding_button.setToolTip("File encoding — click to change")
-        self.encoding_button.clicked.connect(
-            lambda: self._popup_status_menu(
-                self.encoding_button, self.encoding_group.actions()
-            )
-        )
-        self.direction_button = QPushButton("Auto")
-        self.direction_button.setToolTip("Text direction — click to change")
-        self.direction_button.clicked.connect(
-            lambda: self._popup_status_menu(
-                self.direction_button, self.direction_group.actions()
-            )
-        )
-        # Zoom joins them as a chip rather than a dead label: at a glance it
-        # reads the same, and a click puts it back to 100%.
-        self.zoom_label = QPushButton("100%")
-        self.zoom_label.setToolTip("Zoom — click to restore 100%")
-        self.zoom_label.clicked.connect(self.reset_zoom)
-
-        for button in (self.encoding_button, self.direction_button, self.zoom_label):
-            button.setObjectName("statusButton")
-            button.setCursor(Qt.CursorShape.PointingHandCursor)
-            button.setFlat(True)
-            self.statusBar().addPermanentWidget(button)
+        # The window's own status bar is never shown in v4: the editor has
+        # its status line, and passing messages become toasts.
+        self.statusBar().hide()
+        # Only the Persian messages are meant for the reader; the older
+        # English ones («Opened …», «Saved …») narrated routine actions.
+        self.statusBar().messageChanged.connect(
+            lambda text: text and not text[:1].isascii() and self.flash(text))
 
     def _build_today_meter(self) -> QWidget:
         """How much of today is done, at the end of the tab strip.
@@ -1007,6 +978,78 @@ class MainWindow(QMainWindow):
         label = to_persian_digits(str(count)) if count else ""
         self.top_bar.set_open_task_count(label)
         self.navigation_rail.set_task_count(label)
+        self.notes_board.set_open_today(count)
+
+    # Home page helpers
+
+    def flash(self, message: str):
+        """A short confirmation. The toast overlay replaces this in v4."""
+        toast = getattr(self, "toast", None)
+        if toast is not None:
+            toast.flash(message)
+        else:
+            log.info("flash before the toast exists: %s", message)
+
+    def _show_folder(self, name: str):
+        self.notes_board.show_category(name)
+        self._update_crumb()
+
+    def _remember_home_view(self, mode: str):
+        if self._cfg.get("home_view") != mode:
+            self._cfg["home_view"] = mode
+            settings_manager.save(self._cfg)
+
+    def toggle_pin(self, path: str):
+        pinned = list(self._cfg.get("pinned_notes", []))
+        if path in pinned:
+            pinned.remove(path)
+        else:
+            pinned.append(path)
+        self._cfg["pinned_notes"] = pinned
+        settings_manager.save(self._cfg)
+        self.notes_board.set_pinned(pinned)
+
+    def _open_recycle_bin(self):
+        try:
+            os.startfile("shell:RecycleBinFolder")
+        except OSError:
+            self.flash("سطل بازیافت باز نشد")
+
+    def new_folder(self):
+        name, ok = QInputDialog.getText(self, "پوشه‌ی جدید", "نام پوشه:")
+        name = name.strip() if ok else ""
+        if not name or any(ch in name for ch in '<>:"/\\|?*'):
+            return
+        try:
+            (Path(self._cfg["notes_root"]) / name).mkdir(parents=True, exist_ok=True)
+        except OSError:
+            self.flash("پوشه ساخته نشد")
+            return
+        self.flash("پوشه‌ی «" + name + "» ساخته شد؛ با اولین یادداشت نمایش داده می‌شود")
+
+    def _update_crumb(self):
+        """«خانه · همه», «پروژه‌ها · سلتامدیکال», «کارهای من» or «تقویم»."""
+        page = getattr(self, "_page", "home")
+        if page == "home":
+            crumb = "خانه · " + self.folder_sidebar.selected()
+        elif page == "editor":
+            tab = self.current_document()
+            if tab and tab.path:
+                from core.note_library import display_name
+
+                root = Path(self._cfg["notes_root"])
+                try:
+                    folder = Path(tab.path).resolve().relative_to(root.resolve()).parts[:-1]
+                except ValueError:
+                    folder = ()
+                crumb = display_name(folder[0] if folder else "") + " · " + Path(tab.path).stem
+            else:
+                crumb = tab.display_name if tab else "یادداشت"
+        elif page == "calendar":
+            crumb = "تقویم"
+        else:
+            crumb = "کارهای من"
+        self.top_bar.set_crumb(crumb)
 
     def update_today_meter(self, done: int, total: int):
         self._today_meter_holder.setVisible(total > 0)
@@ -1048,7 +1091,7 @@ class MainWindow(QMainWindow):
             )
         )
         # Under the @ button, so it reads as that button's own menu.
-        anchor = self.format_bar.widgetForAction(self._stamp_toolbar_action)
+        anchor = self.format_bar
         if anchor is not None:
             picker.move(
                 anchor.mapToGlobal(anchor.rect().bottomLeft())
@@ -1068,9 +1111,10 @@ class MainWindow(QMainWindow):
         widget = self.tabs.currentWidget()
         return widget if isinstance(widget, DocumentTab) else None
 
-    def _effective_font_size(self) -> int:
-        base = self._cfg.get("font_size", 14)
-        return max(6, min(72, base + self._zoom_steps))
+    def _effective_font_size(self) -> float:
+        """The editor's text size in CSS pixels, zoom included."""
+        base = float(self._cfg.get("font_size", 14.5))
+        return max(8.0, min(96.0, base + self._zoom_steps))
 
     def _default_direction(self) -> str:
         return self._cfg.get("default_direction", "rtl")
@@ -1101,6 +1145,11 @@ class MainWindow(QMainWindow):
         tab.cursor_changed.connect(self._update_status)
         tab.editor.zoom_requested.connect(self.change_zoom)
         tab.editor.direction_changed.connect(self._editor_direction_changed)
+        tab.editor.link_clicked.connect(self.open_link_target)
+        tab.editor.set_link_names(lambda: self._links_index().titles())
+        tab.editor.textChanged.connect(self._links_timer.start)
+        if getattr(self, "_focus", False):
+            tab.set_focus_layout(True)
         index = self.tabs.addTab(tab, tab.display_name)
         self.tabs.setCurrentIndex(index)
         self._document_state_changed(tab)
@@ -1253,16 +1302,332 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def show_quick_open(self):
-        """Ctrl+P — find a note by name without leaving the keyboard."""
-        dialog = QuickOpenDialog(
-            self._cfg["notes_root"],
-            self,
-            commands=self._palette_commands(),
-            tasks=self._tasks_watcher.open_tasks() if self._tasks_watcher else [],
+        """Ctrl+K / Ctrl+P — notes, open tasks and commands in one list."""
+        from core.note_library import display_name, load_library
+        from core.when import day_label
+        from ui.today_rail import task_source
+
+        notes = [
+            {"label": card.title, "sub": display_name(card.folder), "path": card.path}
+            for card in load_library(self._cfg["notes_root"])
+        ]
+        tasks = []
+        if self._tasks_watcher is not None:
+            for task in sorted((t for t in self._tasks_watcher.all_tasks() if not t.done),
+                               key=lambda t: (t.due is None, t.due or datetime.max)):
+                tasks.append({"label": task.text,
+                              "sub": day_label(task.due.date()) if task.due else task_source(task),
+                              "path": task.path, "line": task.line_number})
+        commands = [
+            {"label": "یادداشت جدید", "kbd": "Ctrl N", "run": self.new_document},
+            {"label": "کارهای من", "kbd": "Ctrl T", "run": lambda: self.show_page("tasks")},
+            {"label": "تقویم ماه", "kbd": "", "run": lambda: self.show_page("calendar")},
+            {"label": "رفتن به امروز", "kbd": "",
+             "run": lambda: (self.show_page("home"), self.rail.show_day(date.today()))},
+            {"label": "ویجت روز روی دسکتاپ", "kbd": "Ctrl Shift W", "run": self.toggle_day_widget},
+            {"label": "تنظیمات", "kbd": "Ctrl ,", "run": self.show_settings},
+            {"label": "فهرست میان‌برها", "kbd": "Ctrl /", "run": self.show_shortcuts},
+            {"label": "ضبط سریع", "kbd": "Alt N", "run": self.show_quick_capture},
+            {"label": "مرور صبحگاهی", "kbd": "", "run": self.show_review},
+            {"label": "حالت تمرکز", "kbd": "F11", "run": lambda: self.set_focus_mode(True)},
+        ]
+        extra = [{"label": label, "kbd": keys.replace("+", " "), "run": run}
+                 for label, keys, run in self._palette_commands()]
+        self.palette_overlay.open_with(notes, tasks, commands, extra)
+
+    def _build_overlays(self):
+        from ui.overlays import (
+            CommandPalette,
+            FocusPill,
+            MorningReview,
+            QuickCapture,
+            SettingsPanel,
+            Toast,
         )
-        dialog.note_chosen.connect(self.open_file)
-        dialog.task_chosen.connect(self._open_task)
-        dialog.exec()
+
+        self.palette_overlay = CommandPalette(self)
+        self.palette_overlay.note_chosen.connect(self.open_note_from_board)
+        self.palette_overlay.task_chosen.connect(self._open_task)
+        self.palette_overlay.create_note.connect(self._new_titled_note)
+
+        self.settings_overlay = SettingsPanel(self, APP_VERSION)
+        self.settings_overlay.theme_changed.connect(self.set_theme)
+        self.settings_overlay.palette_changed.connect(self._set_palette)
+        self.settings_overlay.font_size_changed.connect(self._set_font_size)
+        self.settings_overlay.line_numbers_changed.connect(self._set_line_numbers)
+        self.settings_overlay.startup_changed.connect(self._set_run_at_startup)
+        self.settings_overlay.tray_changed.connect(self._set_close_to_tray)
+        self.settings_overlay.folder_change_requested.connect(self._choose_notes_root)
+        self.settings_overlay.sync_requested.connect(self.sync_now)
+
+        self.quick_capture = QuickCapture(self)
+        self.quick_capture.task_submitted.connect(self._capture_task)
+        self.quick_capture.note_submitted.connect(self._save_quick_note)
+
+        self.review = MorningReview(self, self._cfg.get("display_name", "سجاد"))
+        self.review.reschedule.connect(self._review_reschedule)
+        self.review.mark_done.connect(lambda path, line: (self.set_task_done(path, line, True),
+                                                         self._refill_review()))
+        self.review.delete.connect(lambda path, line: (self.delete_task(path, line),
+                                                      self._refill_review()))
+
+        self.toast = Toast(self)
+        self.focus_pill = FocusPill(self)
+        self.focus_pill.exit_requested.connect(lambda: self.set_focus_mode(False))
+
+        for keys, slot in (("Alt+N", self.show_quick_capture), ("F11", self.toggle_focus_mode),
+                           ("Ctrl+Shift+F", self.toggle_focus_mode)):
+            action = QAction(self)
+            action.setShortcut(QKeySequence(keys))
+            action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+            action.triggered.connect(slot)
+            self.addAction(action)
+
+    def _new_titled_note(self, title: str):
+        self.new_document()
+        tab = self.current_document()
+        if tab is not None:
+            tab.editor.setPlainText("# " + title + NEWLINE_CHARS[-1])
+            cursor = tab.editor.textCursor()
+            cursor.movePosition(cursor.MoveOperation.End)
+            tab.editor.setTextCursor(cursor)
+        self.show_page("editor")
+
+    def _capture_task(self, day, text: str):
+        self._add_day_task(day, text)
+        from core.when import day_label
+
+        self.flash("به کارهای " + day_label(day) + " اضافه شد")
+
+    # Settings panel
+
+    def _settings_state(self) -> dict:
+        sync = {"enabled": False, "title": "همگام‌سازی خاموش"}
+        try:
+            config = json.loads((settings_manager.app_data_dir() / "cloud_sync.json")
+                                .read_text(encoding="utf-8"))
+            sync["enabled"] = bool(config.get("enabled"))
+        except (OSError, ValueError):
+            pass
+        if sync["enabled"]:
+            sync["title"] = "متصل به Mini App تلگرام"
+        report = getattr(self, "_sync_report", None) or {}
+        sync["last"] = self.top_bar.sync_button.text().replace("همگام · ", "")
+        conflicts = int(report.get("conflicts", 0) or 0)
+        sync["conflicts"] = "ندارد" if not conflicts else to_persian_digits(str(conflicts))
+        try:
+            state = json.loads((settings_manager.app_data_dir() / "cloud_sync_state.json")
+                               .read_text(encoding="utf-8"))
+            live = sum(1 for item in state.get("items", {}).values() if item.get("hash"))
+            sync["files"] = to_persian_digits(str(live)) + " فایل"
+        except (OSError, ValueError, AttributeError):
+            sync["files"] = "—"
+        shortcuts = [
+            ("جست‌وجو و دستورها", "Ctrl K"), ("یادداشت جدید", "Ctrl N"), ("ذخیره", "Ctrl S"),
+            ("کارهای من", "Ctrl T"), ("باز کردن tasks.md", "Ctrl Shift D"),
+            ("ویجت روز", "Ctrl Shift W"), ("تبدیل خط به کار", "Ctrl Shift 9"),
+            ("انجام شد / نشد", "Ctrl D"), ("دادن تاریخ به کار", "Ctrl Shift A"),
+            ("جست‌وجو / جایگزینی", "Ctrl F / Ctrl H"), ("ضبط سریع", "Alt N"),
+            ("حالت تمرکز", "F11"),
+        ]
+        return {
+            "notes_root": str(Path(self._cfg["notes_root"])),
+            "theme": self._cfg.get("theme", "system"),
+            "palette": self._cfg.get("accent_palette", "graphite"),
+            "font_size": self._cfg.get("font_size", 14.5),
+            "line_numbers": self._cfg.get("show_line_numbers", True),
+            "startup": _run_at_startup_enabled(),
+            "tray": self._cfg.get("close_to_tray", True),
+            "sync": sync,
+            "shortcuts": shortcuts,
+        }
+
+    def _set_palette(self, name: str):
+        self._cfg["accent_palette"] = name
+        settings_manager.save(self._cfg)
+        self._restyle()
+
+    def _set_font_size(self, size: float):
+        self._cfg["font_size"] = size
+        settings_manager.save(self._cfg)
+        self._apply_editor_fonts()
+
+    def _set_line_numbers(self, on: bool):
+        self.line_numbers_action.setChecked(on)
+        self.toggle_line_numbers(on)
+
+    def _set_close_to_tray(self, on: bool):
+        self._cfg["close_to_tray"] = on
+        settings_manager.save(self._cfg)
+
+    def _set_run_at_startup(self, on: bool):
+        if not _set_run_at_startup(on):
+            self.flash("تنظیم اجرا همراه ویندوز ممکن نشد")
+
+    def _choose_notes_root(self):
+        folder = QFileDialog.getExistingDirectory(self, "پوشه‌ی یادداشت‌ها", self._cfg["notes_root"])
+        if folder:
+            self.set_notes_root(folder)
+            if self.settings_overlay.isVisible():
+                self.settings_overlay.open_with(self._settings_state(), "general")
+
+    # Morning review
+
+    def show_review(self):
+        self._refill_review()
+        self.review.open()
+
+    def _overdue_and_today(self):
+        if self._tasks_watcher is None:
+            return [], 0
+        today = date.today()
+        tasks = self._tasks_watcher.all_tasks()
+        overdue = sorted((t for t in tasks if not t.done and t.due and t.due.date() < today),
+                         key=lambda t: t.due)
+        open_today = sum(1 for t in tasks if not t.done and t.due and t.due.date() == today)
+        return overdue, open_today
+
+    def _refill_review(self):
+        overdue, open_today = self._overdue_and_today()
+        self.review.set_tasks(overdue, open_today)
+
+    def _review_reschedule(self, path: str, line: int, day):
+        self.set_task_day(path, line, day)
+        self._refill_review()
+
+    def _maybe_morning_review(self):
+        """Once a day, the first time the window is on screen with the tasks read."""
+        today = date.today().isoformat()
+        if self._cfg.get("review_date") == today or not self.isVisible():
+            return
+        self._cfg["review_date"] = today
+        settings_manager.save(self._cfg)
+        self.show_review()
+
+    # Links between notes
+
+    def insert_note_link(self):
+        """The format bar's link button: «[[]]» with the caret inside."""
+        tab = self.current_document()
+        if tab is None:
+            return
+        editor = tab.editor
+        cursor = editor.textCursor()
+        selected = cursor.selectedText()
+        cursor.insertText("[[" + selected + "]]")
+        if not selected:
+            cursor.movePosition(cursor.MoveOperation.Left, n=2)
+            editor.setTextCursor(cursor)
+            editor.show_link_completer()
+        editor.setFocus()
+
+    def toggle_document_direction(self):
+        tab = self.current_document()
+        if tab is None:
+            return
+        rtl = tab.editor.current_direction() == "rtl"
+        self.set_direction("ltr" if rtl else "rtl")
+
+    def set_links_panel_visible(self, on: bool):
+        self._cfg["links_panel"] = bool(on)
+        settings_manager.save(self._cfg)
+        if not getattr(self, "_focus", False):
+            self.links_panel.setVisible(on)
+        self.format_bar.set_links_visible(on)
+        if on:
+            self.refresh_links_panel()
+
+    def _links_index(self):
+        from core.links import NoteIndex
+
+        return NoteIndex(self._cfg["notes_root"])
+
+    def refresh_links_panel(self):
+        """Stats, outgoing links and backlinks for the current note."""
+        if not hasattr(self, "links_panel") or not self.links_panel.isVisible():
+            return
+        from core.links import backlinks, links_in
+        from core.note_library import display_name
+
+        tab = self.current_document()
+        if tab is None:
+            self.links_panel.show_links(0, [], [])
+            return
+        index = self._links_index()
+        text = tab.text
+        open_tasks = sum(1 for t in parse_document(text) if not t.done)
+        outgoing, seen = [], set()
+        root = Path(self._cfg["notes_root"])
+        for link in links_in(text):
+            if link.target.casefold() in seen:
+                continue
+            seen.add(link.target.casefold())
+            target = index.resolve(link.target)
+            if target is None:
+                outgoing.append({"title": link.label, "sub": "هنوز ساخته نشده",
+                                 "broken": True, "path": ""})
+            else:
+                try:
+                    folder = target.resolve().relative_to(root.resolve()).parts[:-1]
+                except ValueError:
+                    folder = ()
+                outgoing.append({"title": link.label,
+                                 "sub": display_name(folder[0] if folder else ""),
+                                 "broken": False, "path": str(target)})
+        incoming = backlinks(index, Path(tab.path)) if tab.path else []
+        self.links_panel.show_links(open_tasks, outgoing, incoming)
+        tab.editor.set_link_resolver(lambda target: index.resolve(target) is not None)
+
+    def _create_linked_note(self, title: str):
+        """A broken link's «ساختن»: the note, next to the one linking to it."""
+        tab = self.current_document()
+        folder = Path(tab.path).parent if tab and tab.path else Path(self._cfg["notes_root"]) / "Inbox"
+        safe = "".join(ch for ch in title if ch not in '<>:"/\\|?*').strip() or "یادداشت بی‌نام"
+        path = folder / (safe + ".md")
+        if not path.exists():
+            folder.mkdir(parents=True, exist_ok=True)
+            write_text_file_atomic(str(path), "# " + title + NEWLINE_CHARS[-1] * 2, "utf-8")
+            self.flash("یادداشت «" + title + "» ساخته شد")
+        self.open_note_from_board(str(path))
+
+    def open_link_target(self, target: str):
+        """Clicking «[[…]]» in the text: open that note, or make it."""
+        found = self._links_index().resolve(target)
+        if found is not None:
+            self.open_note_from_board(str(found))
+        else:
+            self._create_linked_note(target)
+
+    # Focus mode
+
+    def toggle_focus_mode(self):
+        self.set_focus_mode(not getattr(self, "_focus", False))
+
+    def set_focus_mode(self, on: bool):
+        """Only the page of text: no chrome, a 780px column, a pill to leave by."""
+        self._focus = on
+        if on:
+            self.show_page("editor")
+        self.top_bar.setVisible(not on)
+        self.navigation_rail.setVisible(not on)
+        editor_chrome = getattr(self, "editor_chrome", ())
+        for widget in editor_chrome:
+            widget.setVisible(not on)
+        self.links_panel.setVisible(not on and self._cfg.get("links_panel", True))
+        for index in range(self.tabs.count()):
+            tab = self.tabs.widget(index)
+            if hasattr(tab, "set_focus_layout"):
+                tab.set_focus_layout(on)
+        if on:
+            self.focus_pill.show_pill()
+        else:
+            self.focus_pill.hide()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape and getattr(self, "_focus", False):
+            self.set_focus_mode(False)
+            return
+        super().keyPressEvent(event)
 
     def _palette_commands(self) -> list[tuple]:
         """Every command in the app, read off the (hidden) menus.
@@ -1636,6 +2001,10 @@ class MainWindow(QMainWindow):
 
     def _current_tab_changed(self, _index):
         tab = self.current_document()
+        if hasattr(self, "top_bar"):
+            self._update_crumb()
+        if hasattr(self, "links_panel"):
+            QTimer.singleShot(0, self.refresh_links_panel)
         if tab:
             self.direction_actions[tab.editor.direction_mode].setChecked(True)
             if tab.encoding in self.encoding_actions:
@@ -1871,8 +2240,8 @@ class MainWindow(QMainWindow):
             )
 
     def change_zoom(self, delta: int):
-        base = self._cfg.get("font_size", 14)
-        self._zoom_steps = max(6 - base, min(72 - base, self._zoom_steps + delta))
+        base = float(self._cfg.get("font_size", 14.5))
+        self._zoom_steps = max(8 - base, min(96 - base, self._zoom_steps + delta))
         self._apply_editor_fonts()
         self._update_status()
 
@@ -1909,27 +2278,31 @@ class MainWindow(QMainWindow):
     def _read_sync_status(self):
         path = settings_manager.app_data_dir() / "cloud_sync_status.json"
         if not path.exists():
-            self.top_bar.sync_button.setText("همگام: نامشخص")
-            self.top_bar.sync_button.setToolTip("هنوز گزارشی ثبت نشده؛ برای بررسی کلیک کن.")
+            self.top_bar.set_sync("همگام · نامشخص", "off",
+                                  "هنوز گزارشی ثبت نشده؛ برای بررسی کلیک کن.")
             return None
         try:
+            from core.note_library import edited_label
+
             data = json.loads(path.read_text(encoding="utf-8"))
             checked = datetime.fromisoformat(data["checked_at"]).astimezone()
+            self._sync_report = data
             if data["state"] == "error":
-                title = "خطای همگام"
+                title, state = "خطای همگام‌سازی", "error"
             elif data["state"] == "attention":
-                title = "نیاز به بررسی"
+                title, state = "همگام · نیاز به بررسی", "error"
             else:
-                title = "همگام: " + to_persian_digits(checked.strftime("%H:%M"))
-            self.top_bar.sync_button.setText(title)
-            self.top_bar.sync_button.setToolTip(
-                "آخرین بررسی: " + checked.strftime("%Y-%m-%d %H:%M")
-                + f"\nتعارض: {data.get('conflicts', 0)} · فایل در انتظار: {data.get('skipped', 0)}"
+                title, state = "همگام · " + edited_label(checked.timestamp()), "ok"
+            self.top_bar.set_sync(
+                title, state,
+                "آخرین بررسی: " + to_persian_digits(checked.strftime("%H:%M"))
+                + "\nتعارض: " + to_persian_digits(str(data.get("conflicts", 0)))
+                + " · فایل در انتظار: " + to_persian_digits(str(data.get("skipped", 0)))
                 + ("\n" + data["error"] if data.get("error") else "")
                 + "\nبرای همگام‌سازی دوباره کلیک کن.")
             return checked
         except (OSError, ValueError, KeyError, TypeError):
-            self.top_bar.sync_button.setText("همگام: نامشخص")
+            self.top_bar.set_sync("همگام · نامشخص", "off")
             return None
 
     def _sync_tick(self):
@@ -1944,7 +2317,7 @@ class MainWindow(QMainWindow):
         try:
             config = json.loads(config_file.read_text(encoding="utf-8"))
             if not config.get("enabled"):
-                self.top_bar.sync_button.setText("همگام‌سازی خاموش")
+                self.top_bar.set_sync("همگام‌سازی خاموش", "off")
                 return
             protected = {tab.path for index in range(self.tabs.count())
                          if (tab := self.tabs.widget(index)).path and tab.modified}
@@ -1955,11 +2328,10 @@ class MainWindow(QMainWindow):
             worker.completed.connect(self._sync_finished)
             worker.finished.connect(worker.deleteLater)
             worker.finished.connect(lambda: self._clear_sync_worker(worker))
-            self.top_bar.sync_button.setText("در حال همگام…")
+            self.top_bar.set_sync("در حال همگام‌سازی…", "busy")
             worker.start()
         except (OSError, ValueError, KeyError) as exc:
-            self.top_bar.sync_button.setText("همگام: نامشخص")
-            self.top_bar.sync_button.setToolTip(f"تنظیم همگام‌سازی پیدا نشد: {exc}")
+            self.top_bar.set_sync("همگام · نامشخص", "off", f"تنظیم همگام‌سازی پیدا نشد: {exc}")
 
     def _sync_finished(self, result, error: str):
         if self._closing_application:
@@ -2001,44 +2373,30 @@ class MainWindow(QMainWindow):
             )
         )
         self._dot_icons.clear()
-        self.top_bar.refresh_palette()
-        self.navigation_rail.refresh_palette()
-        self._find_toolbar_action.setIcon(
-            icon("search", current_palette()["muted"], 13)
-        )
+        # The painted v4 surfaces read the palette at paint time; they only
+        # need to be told to paint again. The one QLineEdit in each quick-add
+        # field carries a small sheet of its own.
+        for widget in (self.top_bar, self.navigation_rail, self.folder_sidebar,
+                       self.notes_board, self.rail):
+            widget.refresh_palette()
+        self.update()
+        for widget in (self.tab_strip, self.format_bar, self.editor_status, self.links_panel):
+            widget.update()
+            for child in widget.findChildren(QWidget):
+                child.update()
         self.document_tab_bar.refresh_close_icons()
         for index in range(self.tabs.count()):
             tab = self.tabs.widget(index)
             tab.highlighter.rehighlight()
             self.tabs.setTabIcon(index, self._dot_icon(tab.modified))
 
-    def show_settings(self):
-        dialog = SettingsDialog(self._cfg, self)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-        values = dialog.values()
-        restyle_needed = values["theme"] != self._cfg.get("theme") or values[
-            "accent_palette"
-        ] != self._cfg.get("accent_palette")
-        self._cfg.update(values)
-        settings_manager.save(self._cfg)
-        settings_manager.resolve_save_dir(self._cfg)
-        if restyle_needed:
-            self.theme_actions[values["theme"]].setChecked(True)
-            self._restyle()
-        self.line_numbers_action.setChecked(values["show_line_numbers"])
-        self.toggle_line_numbers(values["show_line_numbers"])
-        self.word_wrap_action.setChecked(values["word_wrap"])
-        self.toggle_word_wrap(values["word_wrap"])
-        self._apply_editor_fonts()
-        self._update_status()
+    def show_settings(self, section: str = "look"):
+        """Ctrl+, — the design's settings panel; every change applies at once."""
+        self.settings_overlay.open_with(self._settings_state(),
+                                        section if isinstance(section, str) else "look")
 
     def show_shortcuts(self):
-        ShortcutsDialog(
-            self._cfg.get("theme", "system"),
-            self,
-            self._cfg.get("accent_palette", "graphite"),
-        ).show()
+        self.show_settings("keys")
 
     def show_about(self):
         QMessageBox.about(
@@ -2067,34 +2425,28 @@ class MainWindow(QMainWindow):
         tab = self.current_document()
         if not tab:
             return
+        status = self.editor_status
         cursor = tab.editor.textCursor()
-        self.cursor_label.setText(
-            f"Ln {cursor.blockNumber() + 1}, Col {cursor.positionInBlock() + 1}"
-        )
-        if tab.editor.document().characterCount() <= WORD_COUNT_LIMIT:
-            words, chars = tab.counts()
-            self.count_label.setText(f"{words:,} words · {chars:,} characters")
+        status.set_position(cursor.blockNumber() + 1, cursor.positionInBlock() + 1)
+        document = tab.editor.document()
+        if document.characterCount() <= WORD_COUNT_LIMIT:
+            tasks = len(parse_document(tab.text))
         else:
-            self.count_label.setText(
-                f"{tab.editor.document().characterCount() - 1:,} characters"
-            )
-        base = self._cfg.get("font_size", 14)
-        self.zoom_label.setText(f"{round(self._effective_font_size() / base * 100)}%")
-        self.encoding_button.setText(tab.encoding.upper())
-        direction = tab.editor.current_direction().upper()
+            tasks = 0
+        status.set_counts(document.blockCount(), tasks)
+        base = float(self._cfg.get("font_size", 14.5))
+        status.set_zoom(round(self._effective_font_size() / base * 100))
+        kind = "Markdown" if (tab.path or tab.pending_path or "").lower().endswith(
+            (".md", ".markdown")) or not (tab.path or tab.pending_path) else "Text"
+        status.format.set_text(kind + " · " + tab.encoding.upper().replace("UTF-8-SIG", "UTF-8 BOM"))
+        rtl = tab.editor.current_direction() == "rtl"
+        label = "راست‌چین" if rtl else "چپ‌چین"
         if tab.editor.direction_mode == "auto":
-            direction += " · Auto"
-        self.direction_button.setText(direction)
-        # A dot carries the state at a glance; the word confirms it. The
-        # property drives the colour, so the sheet owns which one it is.
-        self.saved_label.setText(
-            "● Unsaved" if tab.modified else "● Saved"
-        )
-        dirty = "true" if tab.modified else "false"
-        if self.saved_label.property("dirty") != dirty:
-            self.saved_label.setProperty("dirty", dirty)
-            self.saved_label.style().unpolish(self.saved_label)
-            self.saved_label.style().polish(self.saved_label)
+            label += " · خودکار"
+        status.direction.set_text(label)
+        self.format_bar.set_direction_label(rtl)
+        status.set_saved(not tab.modified)
+        self.document_tab_bar.update()
 
     # Recent files, recovery, migration
 
@@ -2286,6 +2638,56 @@ class MainWindow(QMainWindow):
         self.raise_()
         self.activateWindow()
 
+    def has_tray(self) -> bool:
+        return self._tray is not None
+
+    def start_in_background(self):
+        """A --minimized start: no window, but tasks and the widget are live."""
+        self._start_task_watcher()
+        if self._cfg.get("day_widget"):
+            self._show_day_widget()
+
+    # Win+Alt+N from anywhere in Windows
+
+    _HOTKEY_ID = 0x4E50  # "NP"
+
+    def register_global_hotkey(self):
+        """Quick capture from any app. Silently skipped if Windows refuses —
+        another program may already own the combination."""
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+
+            MOD_ALT, MOD_WIN, MOD_NOREPEAT, VK_N = 0x0001, 0x0008, 0x4000, 0x4E
+            self._hotkey_ok = bool(ctypes.windll.user32.RegisterHotKey(
+                int(self.winId()), self._HOTKEY_ID, MOD_ALT | MOD_WIN | MOD_NOREPEAT, VK_N))
+        except Exception:
+            self._hotkey_ok = False
+            log.warning("Could not register Win+Alt+N", exc_info=True)
+
+    def _unregister_global_hotkey(self):
+        if sys.platform == "win32" and getattr(self, "_hotkey_ok", False):
+            try:
+                import ctypes
+
+                ctypes.windll.user32.UnregisterHotKey(int(self.winId()), self._HOTKEY_ID)
+            except Exception:
+                pass
+
+    def nativeEvent(self, event_type, message):
+        if sys.platform == "win32" and getattr(self, "_hotkey_ok", False):
+            try:
+                import ctypes.wintypes
+
+                msg = ctypes.wintypes.MSG.from_address(int(message))
+                if msg.message == 0x0312 and msg.wParam == self._HOTKEY_ID:  # WM_HOTKEY
+                    QTimer.singleShot(0, self.show_quick_capture)
+                    return True, 0
+            except Exception:
+                pass
+        return super().nativeEvent(event_type, message)
+
     def _install_tray(self):
         """Put the app in the notification area, if there is one.
 
@@ -2311,13 +2713,11 @@ class MainWindow(QMainWindow):
         if index is None:
             return
         self.pages.setCurrentIndex(index)
+        self._page = key
         self.top_bar.set_page(key)
         self.navigation_rail.set_page(key)
         if key in {"tasks", "calendar"} and self.tasks_workspace is not None:
             self.tasks_workspace.set_mode("calendar" if key == "calendar" else "tasks")
-        # Cursor position, word count and the encoding chip describe a
-        # document; on the home screen there is none to describe.
-        self.statusBar().setVisible(key == "editor")
         self._cfg["page"] = key
         settings_manager.save(self._cfg)
         # Home is a view over files anything may have changed, so it re-reads
@@ -2334,6 +2734,7 @@ class MainWindow(QMainWindow):
                 tab.editor.setFocus()
         else:
             self.refresh_tasks()
+        self._update_crumb()
 
     def open_note_from_board(self, path: str):
         if self.open_file(path):
@@ -2361,11 +2762,14 @@ class MainWindow(QMainWindow):
     def _ensure_tasks_workspace(self):
         if self.tasks_workspace is not None:
             return
-        workspace = TasksWorkspace()
+        workspace = TasksWorkspace(line_reader=self.task_line)
         workspace.task_toggled.connect(self.set_task_done)
         workspace.task_delete_requested.connect(self.delete_task)
         workspace.task_opened.connect(self.open_task_in_editor)
         workspace.task_added.connect(self._workspace_add_task)
+        workspace.task_rescheduled.connect(self.set_task_day)
+        workspace.added_elsewhere.connect(self.flash)
+        workspace.day_chosen.connect(self.rail.show_day)
         self.pages.insertWidget(2, workspace)
         self.pages.removeWidget(self._tasks_placeholder)
         self._tasks_placeholder.deleteLater()
@@ -2389,19 +2793,18 @@ class MainWindow(QMainWindow):
             self.show_quick_capture(day)
 
     def show_quick_capture(self, day=None):
-        dialog = QuickCaptureDialog(self, day)
-        dialog.task_submitted.connect(self._add_day_task)
-        dialog.note_submitted.connect(self._save_quick_note)
-        dialog.exec()
+        """Alt+N (and Win+Alt+N from anywhere): one line, task or inbox note."""
+        self._reveal_window()
+        self.quick_capture.open_fresh()
 
     def _save_quick_note(self, text: str):
-        """Write a captured thought into the real notes folder.
+        """Write a captured thought into Inbox/, the same folder the bot uses.
 
-        A timestamp keeps the operation collision-free; the first line is
-        retained as the visible Markdown heading, matching the mobile app.
+        A timestamp keeps the name collision-free; the first line becomes
+        the note's Markdown heading.
         """
         root = Path(self._cfg["notes_root"])
-        inbox = root / "ورودی‌ها"
+        inbox = root / "Inbox"
         inbox.mkdir(parents=True, exist_ok=True)
         first = next((line.strip("# ") for line in text.splitlines() if line.strip()), "یادداشت سریع")
         safe = "".join(ch for ch in first[:36] if ch not in '<>:"/\\|?*').strip() or "یادداشت سریع"
@@ -2412,7 +2815,7 @@ class MainWindow(QMainWindow):
         self.folder_sidebar.set_categories(
             self.notes_board.category_names(), self.notes_board.category_counts()
         )
-        self.statusBar().showMessage("یادداشت در ورودی‌ها ذخیره شد", 2500)
+        self.flash("در «ورودی‌ها» ذخیره شد")
 
     def _reread_tasks_for(self, day):
         path = task_file.path_for(self._cfg["notes_root"])
@@ -2454,6 +2857,12 @@ class MainWindow(QMainWindow):
         self.rail.set_tasks(tasks)
         if self.tasks_workspace is not None:
             self.tasks_workspace.set_tasks(tasks)
+        if self.review.isVisible():
+            self._refill_review()
+        if not getattr(self, "_review_checked", False):
+            # The first scan after start is what the morning review needs.
+            self._review_checked = True
+            QTimer.singleShot(300, self._maybe_morning_review)
 
     def _tab_for_pending(self, path: str) -> DocumentTab | None:
         """An open, still-unsaved document already aimed at this filename."""
@@ -2537,6 +2946,25 @@ class MainWindow(QMainWindow):
             self._notify_tasks_changed()
         else:
             self.statusBar().showMessage("تعویق این کار ممکن نشد", 4000)
+
+    def set_task_day(self, path: str, line_number: int, day):
+        """Give one task a new date, keeping its time and its ↻."""
+        def transform(line: str):
+            task = parse_task(line)
+            if task is None:
+                return None
+            at = task.due.time() if (task.due and task.has_time) else None
+            return set_stamp(line, day, at)
+
+        if self.rewrite_task_line(path, line_number, transform):
+            from core.when import day_label
+
+            self.flash("به کارهای " + day_label(day) + " منتقل شد")
+            self._notify_tasks_changed()
+            self.refresh_tasks()
+
+    def task_line(self, path: str, line_number: int) -> str | None:
+        return self._task_line(path, line_number)
 
     def set_task_done(self, path: str, line_number: int, done: bool):
         """Tick or untick one task from a surface outside the editor."""
@@ -2830,7 +3258,8 @@ class MainWindow(QMainWindow):
         alive and reopening costs nothing. Without a tray there is nowhere to
         hide to, so that case still exits.
         """
-        if not self._really_quitting and self._tray is not None:
+        if (not self._really_quitting and self._tray is not None
+                and self._cfg.get("close_to_tray", True)):
             self._save_window_state()
             self.hide()
             event.ignore()
@@ -2848,6 +3277,7 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
         self._save_window_state()
+        self._unregister_global_hotkey()
         if self._tray is not None:
             self._tray.hide()
         if self._day_widget is not None:

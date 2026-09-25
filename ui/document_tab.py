@@ -13,13 +13,17 @@ from ui.editor import SmartEditor
 from ui.markdown_highlighter import MarkdownHighlighter
 
 
-def editor_font(latin: str, persian: str, size: int) -> QFont:
-    """Editor font covering both scripts — see settings_manager.font_chain."""
+def editor_font(latin: str, persian: str, size: float) -> QFont:
+    """Editor font covering both scripts — see settings_manager.font_chain.
+
+    `size` is in CSS pixels (the design's 14.5px body); a pixel is three
+    quarters of a point at 96 logical DPI.
+    """
     font = QFont()
     font.setFamilies(
         font_chain({"font_family_latin": latin, "font_family_persian": persian})
     )
-    font.setPointSize(size)
+    font.setPointSizeF(size * 0.75)
     return font
 
 
@@ -90,6 +94,9 @@ class DocumentTab(QWidget):
 
     def apply_font(self, font: QFont):
         self.editor.setFont(font)
+
+    def set_focus_layout(self, on: bool):
+        self.editor.set_focus_layout(on)
 
     def _invalidate_counts(self):
         self._counts = None

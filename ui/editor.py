@@ -1,6 +1,7 @@
-from PyQt6.QtCore import QPoint, QPointF, QRect, QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, QSize, QStringListModel, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (
     QFontMetrics,
+    QFontMetricsF,
     QColor,
     QFont,
     QPainter,
@@ -8,7 +9,7 @@ from PyQt6.QtGui import (
     QTextBlockFormat,
     QTextCursor,
 )
-from PyQt6.QtWidgets import QTextEdit, QWidget
+from PyQt6.QtWidgets import QCompleter, QTextEdit, QWidget
 
 from core.list_editing import (
     display_number_marker,
@@ -18,8 +19,28 @@ from core.list_editing import (
 )
 from core.jalali import format_pill, to_persian_digits
 from core.rtl_detector import detect_direction
+from core.formatting import HEADING_RE
+from core.links import LINK_RE
 from core.tasks import parse_task, stamp_span
+from core.when import day_label
+from ui.kit import col, draw_checkbox, draw_icon, draw_text, font as design_font, rounded, text_width, tint
 from ui.styles import current_palette
+
+# The design's text column, in CSS pixels at the 14.5px body size: a row per
+# line with 2px above and below, a 26px line-number column 14px in from the
+# right edge with a 14px gap before the text, 40px of room on the left,
+# 34px above the first line and 60 below the last.
+BODY_PX = 14.5
+ROW_PAD = 2
+NUMBER_COLUMN = 26
+NUMBER_EDGE = 14
+NUMBER_GAP = 14
+LEFT_ROOM = 40
+DOC_TOP, DOC_BOTTOM = 34, 60
+TEXT_MAX = 860
+FOCUS_WIDTH, FOCUS_PAD, FOCUS_TOP, FOCUS_BOTTOM = 780, 24, 72, 120
+# (size, CSS line-height, extra top padding) per heading level, at 14.5px.
+HEADING_SPEC = {1: (27, 1.6, 0), 2: (17, 1.9, 6), 3: (15.5, 1.9, 4)}
 
 
 class LineNumberArea(QWidget):
@@ -27,13 +48,24 @@ class LineNumberArea(QWidget):
         super().__init__(editor)
         self.editor = editor
         self.setObjectName("lineNumberArea")
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
     def sizeHint(self):
         return QSize(self.editor.line_number_area_width(), 0)
 
-    def paintEvent(self, event):
+    def paintEvent(self, event):  # noqa: D401 — delegates to the editor
         self.editor.paint_line_number_area(event)
+
+
+class MarginArea(QWidget):
+    """The empty room on the far side of the text: it only carries the
+    current line's highlight, which in the design spans the whole row."""
+
+    def __init__(self, editor):
+        super().__init__(editor)
+        self.editor = editor
+
+    def paintEvent(self, event):  # noqa: D401 — delegates to the editor
+        self.editor.paint_margin_area(self)
 
 
 # Marker layout. The checkbox is sized from the line height but clamped so it
@@ -58,6 +90,7 @@ class SmartEditor(QTextEdit):
 
     zoom_requested = pyqtSignal(int)
     direction_changed = pyqtSignal(str)
+    link_clicked = pyqtSignal(str)
 
     # Windows scan codes for the left and right Shift keys. Pressing the
     # right Shift while holding Ctrl switches to RTL, the left one to LTR —
@@ -82,6 +115,15 @@ class SmartEditor(QTextEdit):
         self._dirty_last = -1
         self._needs_full_pass = True
         self._line_area = LineNumberArea(self)
+        self._margin_area = MarginArea(self)
+        self._focus_layout = False
+        self._near_pad = NUMBER_EDGE
+        self._far_pad = LEFT_ROOM
+        self._row_metrics: dict = {}
+        self._link_resolver = lambda target: True
+        self._link_names = lambda: []
+        self._link_cache: list | None = None
+        self._completer: QCompleter | None = None
         self.viewport().setMouseTracking(True)
         # A single debounced pass scans the text once and updates both the
         # code highlight and paragraph directions, instead of scanning twice.
@@ -97,6 +139,9 @@ class SmartEditor(QTextEdit):
         self.textChanged.connect(self._schedule_refresh)
         self.textChanged.connect(self._line_area.update)
         self.cursorPositionChanged.connect(self._cursor_context_changed)
+        self.cursorPositionChanged.connect(self._margin_area.update)
+        self.cursorPositionChanged.connect(self.viewport().update)
+        self.verticalScrollBar().valueChanged.connect(self._margin_area.update)
         # Anything that moves a marker on screen drops the cached geometry.
         self.textChanged.connect(self._invalidate_marker_cache)
         self.verticalScrollBar().valueChanged.connect(self._invalidate_marker_cache)
@@ -109,14 +154,83 @@ class SmartEditor(QTextEdit):
     # Line numbers
 
     def line_number_area_width(self) -> int:
-        digits = max(2, len(str(max(1, self.document().blockCount()))))
-        return 14 + self.fontMetrics().horizontalAdvance("9") * digits
+        """The near-side room: the number column plus its edge and gap."""
+        if not self._line_numbers_visible:
+            return round(self._near_pad)
+        return round(self._near_pad + NUMBER_COLUMN + NUMBER_GAP)
 
-    def _update_line_area_width(self):
-        # Line numbers live in a fixed gutter on the left, regardless of the
-        # per-paragraph text direction.
-        width = self.line_number_area_width() if self._line_numbers_visible else 0
-        self.setViewportMargins(width, 0, 0, 0)
+    def _is_rtl_document(self) -> bool:
+        return self.direction_mode != "ltr"
+
+    def _update_line_area_width(self, width: int | None = None, relayout: bool = True):
+        """Lay out the page: numbers on the near side (right, for RTL), the
+        design's 40px room on the far side, 34px above and 60px below — or
+        the 780px centred column of focus mode."""
+        before = self.viewportMargins()
+        width = max(1, width if width is not None else self.contentsRect().width())
+        if self._focus_layout:
+            inner = min(FOCUS_WIDTH, width)
+            side = (width - inner) / 2
+            self._near_pad = side + FOCUS_PAD
+            self._far_pad = side + FOCUS_PAD
+            top, bottom = FOCUS_TOP, FOCUS_BOTTOM
+            far = self._far_pad
+        else:
+            self._near_pad = NUMBER_EDGE
+            self._far_pad = LEFT_ROOM
+            top, bottom = DOC_TOP, DOC_BOTTOM
+            far = max(LEFT_ROOM, width - self.line_number_area_width() - TEXT_MAX)
+        near = self.line_number_area_width()
+        if self._is_rtl_document():
+            self.setViewportMargins(round(far), 0, near, 0)
+        else:
+            self.setViewportMargins(near, 0, round(far), 0)
+        frame = self.document().rootFrame()
+        fmt = frame.frameFormat()
+        if (fmt.topMargin(), fmt.bottomMargin(), fmt.leftMargin(), fmt.rightMargin()) != (top, bottom, 0, 0):
+            self.document().setDocumentMargin(0)
+            fmt = frame.frameFormat()
+            fmt.setTopMargin(top)
+            fmt.setBottomMargin(bottom)
+            fmt.setLeftMargin(0)
+            fmt.setRightMargin(0)
+            frame.setFrameFormat(fmt)
+        self._place_side_areas()
+        if relayout and self.viewportMargins() != before:
+            # QTextEdit wraps to the viewport width only when it is resized
+            # itself; a margin change narrows the viewport without that.
+            from PyQt6.QtGui import QResizeEvent
+
+            QTextEdit.resizeEvent(self, QResizeEvent(self.size(), self.size()))
+
+    def _place_side_areas(self):
+        content = self.contentsRect()
+        margins = self.viewportMargins()
+        if self._is_rtl_document():
+            near = QRect(content.right() - margins.right() + 1, content.top(), margins.right(), content.height())
+            far = QRect(content.left(), content.top(), margins.left(), content.height())
+        else:
+            near = QRect(content.left(), content.top(), margins.left(), content.height())
+            far = QRect(content.right() - margins.right() + 1, content.top(), margins.right(), content.height())
+        self._line_area.setGeometry(near)
+        self._margin_area.setGeometry(far)
+
+    def set_focus_layout(self, on: bool):
+        self._focus_layout = on
+        self._update_line_area_width()
+        self.viewport().update()
+
+    def set_link_resolver(self, resolver):
+        """`resolver(target) -> bool`: does «[[target]]» name a real note?"""
+        self._link_resolver = resolver
+        if self.markdown_highlighter is not None:
+            self.markdown_highlighter.rehighlight()
+        self._link_cache = None
+        self.viewport().update()
+
+    def set_link_names(self, source):
+        """`source() -> [str]`: note names offered after «[[»."""
+        self._link_names = source
 
     def set_line_numbers_visible(self, visible: bool):
         self._line_numbers_visible = visible
@@ -124,54 +238,77 @@ class SmartEditor(QTextEdit):
         self._update_line_area_width()
 
     def resizeEvent(self, event):
+        # Margins first, so the text wraps to the viewport it will really have.
+        self._update_line_area_width(event.size().width() - 2 * self.frameWidth(), relayout=False)
         super().resizeEvent(event)
         self._invalidate_marker_cache()
-        content = self.contentsRect()
-        width = self.line_number_area_width()
-        self._line_area.setGeometry(
-            QRect(content.left(), content.top(), width, content.height())
-        )
+        self._place_side_areas()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == event.Type.FontChange:
+            # Row heights are derived from the font; every block needs them again.
+            self._row_metrics.clear()
+            self._needs_full_pass = True
+            self.apply_directions()
+
+    def _block_rect(self, block) -> QRectF:
+        """A block's full row, margins included, in viewport coordinates."""
+        rect = self.document().documentLayout().blockBoundingRect(block)
+        return rect.translated(0, -self.verticalScrollBar().value())
+
+    def _current_row(self) -> QRectF | None:
+        block = self.textCursor().block()
+        if not block.isValid() or self.textCursor().hasSelection():
+            return None
+        return self._block_rect(block)
+
+    def paint_margin_area(self, area):
+        painter = QPainter(area)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.fillRect(area.rect(), col("window"))
+        row = self._current_row()
+        if row is not None:
+            if self._is_rtl_document():
+                rect = QRectF(self._far_pad, row.top(), area.width() - self._far_pad + 10, row.height())
+            else:
+                rect = QRectF(-10, row.top(), area.width() - self._far_pad + 10, row.height())
+            rounded(painter, rect, 6, fill=col("current_line"))
+        painter.end()
 
     def paint_line_number_area(self, event):
-        painter = QPainter(self._line_area)
-        theme = current_palette()
-        idle_color = QColor(theme["muted"])
-        idle_color.setAlpha(150)
-        current_color = QColor(theme["accent"])
-        current_line = self.textCursor().blockNumber()
-
-        number_font = QFont(self.font())
-        number_font.setPointSizeF(max(7.0, self.font().pointSizeF() * 0.85))
-        painter.setFont(number_font)
-
-        first_cursor = self.cursorForPosition(QPoint(0, 0))
-        block = first_cursor.block()
-        number = block.blockNumber()
-
+        """Persian line numbers at 11.5px in the design's 26px column, and the
+        near end of the current line's highlight."""
+        area = self._line_area
+        painter = QPainter(area)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.fillRect(area.rect(), col("window"))
+        rtl = self._is_rtl_document()
+        row = self._current_row()
+        if row is not None:
+            if rtl:
+                rect = QRectF(-10, row.top(), area.width() - self._near_pad + 10, row.height())
+            else:
+                rect = QRectF(self._near_pad, row.top(), area.width() - self._near_pad + 10, row.height())
+            rounded(painter, rect, 6, fill=col("current_line"))
+        if not self._line_numbers_visible:
+            painter.end()
+            return
+        number_font = design_font(11.5)
+        colour = col("gutter")
+        column_x = area.width() - self._near_pad - NUMBER_COLUMN if rtl else self._near_pad
+        block = self.cursorForPosition(QPoint(0, 0)).block()
+        bottom_limit = event.rect().bottom()
         while block.isValid():
-            cursor = QTextCursor(block)
-            top = self.cursorRect(cursor).top()
-            height = max(self.fontMetrics().height(), self.cursorRect(cursor).height())
-            bottom = top + height
-            if top > event.rect().bottom():
+            first_line = self.cursorRect(QTextCursor(block))
+            if first_line.top() > bottom_limit:
                 break
-            if block.isVisible() and bottom >= event.rect().top():
-                is_current = number == current_line
-                number_font.setBold(is_current)
-                painter.setFont(number_font)
-                painter.setPen(current_color if is_current else idle_color)
-                painter.drawText(
-                    0,
-                    top,
-                    self._line_area.width() - 10,
-                    self.fontMetrics().height(),
-                    Qt.AlignmentFlag.AlignRight,
-                    # Persian digits, like the design and like the numbered
-                    # list markers already in the text.
-                    to_persian_digits(str(number + 1)),
-                )
+            if block.isVisible() and first_line.bottom() >= event.rect().top():
+                draw_text(painter, QRectF(column_x, first_line.top(), NUMBER_COLUMN, first_line.height()),
+                          to_persian_digits(str(block.blockNumber() + 1)), number_font, colour,
+                          Qt.AlignmentFlag.AlignCenter, elide_text=False)
             block = block.next()
-            number += 1
+        painter.end()
 
     # Direction
 
@@ -251,6 +388,7 @@ class SmartEditor(QTextEdit):
             if numbered and direction == "rtl"
             else 0.0
         )
+        top, bottom, distance = self._row_spacing(cursor.block().text())
         # Exact comparison: an `&` test passes as soon as the AlignAbsolute
         # bit matches, silently skipping the actual left/right realignment.
         if (
@@ -258,6 +396,10 @@ class SmartEditor(QTextEdit):
             and current.alignment() == expected_alignment
             and current.leftMargin() == expected_left_margin
             and current.rightMargin() == expected_right_margin
+            and abs(current.topMargin() - top) < 0.01
+            and abs(current.bottomMargin() - bottom) < 0.01
+            and abs(current.lineHeight() - distance) < 0.01
+            and current.lineHeightType() == 4
         ):
             return False
         fmt = QTextBlockFormat(current)
@@ -265,8 +407,50 @@ class SmartEditor(QTextEdit):
         fmt.setAlignment(expected_alignment)
         fmt.setLeftMargin(expected_left_margin)
         fmt.setRightMargin(expected_right_margin)
+        fmt.setTopMargin(top)
+        fmt.setBottomMargin(bottom)
+        fmt.setLineHeight(distance, 4)  # LineDistanceHeight
         cursor.setBlockFormat(fmt)
         return True
+
+    def _body_px(self) -> float:
+        return self.font().pointSizeF() / 0.75
+
+    def _row_spacing(self, text: str) -> tuple[float, float, float]:
+        """(top margin, bottom margin, extra line distance) for one block.
+
+        The design sets every line as a row: CSS line-height 2 for body text
+        (1.6 for a title, 1.9 for a section), 2px above and below, at least
+        32px. Qt lays a line at the font's own height, so the difference is
+        split above and below the first line and added between wrapped ones.
+        """
+        heading = HEADING_RE.match(text)
+        level = len(heading.group(1)) if heading else 0
+        base = self._body_px()
+        key = (level, round(base, 2))
+        cached = self._row_metrics.get(key)
+        if cached is not None:
+            return cached
+        scale = base / BODY_PX
+        if level in HEADING_SPEC:
+            size, factor, extra = HEADING_SPEC[level]
+            px, extra = size * scale, extra * scale
+        else:
+            px, factor, extra = base, 2.0, 0.0
+        # A line is as tall as the tallest font it uses: Persian text falls
+        # back to Vazirmatn, whose ascent and descent are well above Inter's.
+        natural = 0.0
+        for family in self.font().families() or [self.font().family()]:
+            measured = QFont(self.font())
+            measured.setFamilies([family])
+            measured.setPointSizeF(px * 0.75)
+            natural = max(natural, QFontMetricsF(measured).height())
+        line = px * factor
+        row = max(32 * scale, line + 2 * ROW_PAD * scale)
+        spare = row - natural
+        result = (spare / 2 + extra, spare / 2, line - natural)
+        self._row_metrics[key] = result
+        return result
 
     def apply_directions(self, only_dirty: bool = False):
         """Re-apply per-paragraph direction.
@@ -383,7 +567,25 @@ class SmartEditor(QTextEdit):
                 event.accept()
                 return
 
+        popup = self._completer.popup() if self._completer else None
+        if popup is not None and popup.isVisible() and event.key() in (
+            Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Escape,
+            Qt.Key.Key_Tab, Qt.Key.Key_Backtab,
+        ):
+            # The popup has the keyboard for these; let it pick or close.
+            event.ignore()
+            return
+
         if self._handle_list_key(event):
+            event.accept()
+            return
+
+        if event.text() == "[" and self._text_before_cursor(1) == "[":
+            cursor = self.textCursor()
+            cursor.insertText("[]]")
+            cursor.movePosition(QTextCursor.MoveOperation.PreviousCharacter, n=2)
+            self.setTextCursor(cursor)
+            self.show_link_completer()
             event.accept()
             return
 
@@ -401,6 +603,69 @@ class SmartEditor(QTextEdit):
                     self._apply_block_direction(cursor, self.direction_mode)
         elif event.text():
             self._schedule_refresh()
+        if popup is not None and popup.isVisible():
+            self._update_completion_prefix()
+
+    # «[[» suggestions
+
+    def _text_before_cursor(self, count: int) -> str:
+        cursor = self.textCursor()
+        block_text = cursor.block().text()
+        column = cursor.positionInBlock()
+        return block_text[max(0, column - count):column]
+
+    def _link_prefix(self) -> str | None:
+        """What has been typed since the «[[» the caret sits after, if any."""
+        cursor = self.textCursor()
+        before = cursor.block().text()[:cursor.positionInBlock()]
+        opening = before.rfind("[[")
+        if opening < 0 or "]]" in before[opening:]:
+            return None
+        return before[opening + 2:]
+
+    def show_link_completer(self):
+        names = list(self._link_names())
+        if not names:
+            return
+        if self._completer is None:
+            self._completer = QCompleter(QStringListModel(names), self)
+            self._completer.setWidget(self)
+            self._completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+            self._completer.setFilterMode(Qt.MatchFlag.MatchContains)
+            self._completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+            self._completer.activated[str].connect(self._insert_link_name)
+            popup = self._completer.popup()
+            popup.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+            popup.setFont(design_font(13))
+        else:
+            self._completer.model().setStringList(names)
+        self._update_completion_prefix()
+
+    def _update_completion_prefix(self):
+        prefix = self._link_prefix()
+        if prefix is None or self._completer is None:
+            if self._completer is not None:
+                self._completer.popup().hide()
+            return
+        self._completer.setCompletionPrefix(prefix)
+        rect = self.cursorRect()
+        rect.translate(self.viewport().pos())
+        rect.setWidth(260)
+        if self._is_rtl_document():
+            rect.moveRight(self.cursorRect().right() + self.viewport().pos().x())
+        self._completer.complete(rect)
+
+    def _insert_link_name(self, name: str):
+        prefix = self._link_prefix()
+        if prefix is None:
+            return
+        cursor = self.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.PreviousCharacter,
+                            QTextCursor.MoveMode.KeepAnchor, len(prefix))
+        cursor.insertText(name)
+        if cursor.block().text()[cursor.positionInBlock():].startswith("]]"):
+            cursor.movePosition(QTextCursor.MoveOperation.NextCharacter, n=2)
+        self.setTextCursor(cursor)
 
     # Smart Markdown lists
 
@@ -672,6 +937,7 @@ class SmartEditor(QTextEdit):
     def _invalidate_marker_cache(self):
         self._marker_cache = None
         self._stamp_cache = None
+        self._link_cache = None
 
     def _span_rect(self, block, start: int, end: int) -> QRect | None:
         """Screen rectangle covering one character range of a block.
@@ -754,7 +1020,7 @@ class SmartEditor(QTextEdit):
                                     STAMP_PAD_X,
                                     STAMP_PAD_Y,
                                 ),
-                                format_pill(task.due.date())
+                                day_label(task.due.date())
                                 if task and task.due
                                 else "",
                                 bool(task and task.overdue),
@@ -775,142 +1041,131 @@ class SmartEditor(QTextEdit):
         )
 
     def _paint_checkbox(self, painter, marker_rect, item, hovered, theme):
-        accent = QColor(theme["accent"])
-        muted = QColor(theme["muted"])
-        on_accent = QColor(theme["on_accent"])
+        """The design's box: 16px, radius 5, a 1.5px outline — or an accent
+        square with a dark check."""
+        centre = QPointF(marker_rect.center())
+        border = col("accent") if hovered else col("box")
+        draw_checkbox(painter, centre, 16, 5, item.checked, border=border)
 
-        size = max(CHECKBOX_MIN_SIZE, min(CHECKBOX_MAX_SIZE, marker_rect.height() - 4))
-        box = QRect(0, 0, size, size)
-        box.moveCenter(marker_rect.center())
+    def _visible_links(self):
+        """(rect, target, broken) for every «[[…]]» label on screen."""
+        if self._link_cache is not None:
+            return self._link_cache
+        links = []
+        block = self.cursorForPosition(QPoint(0, 0)).block()
+        bottom = self.viewport().height()
+        while block.isValid():
+            if self.cursorRect(QTextCursor(block)).top() > bottom:
+                break
+            text = block.text()
+            if block.isVisible() and "[[" in text:
+                for match in LINK_RE.finditer(text):
+                    start, end = match.span(2) if match.group(2) else match.span(1)
+                    rect = self._span_rect(block, start, end)
+                    if rect is not None and rect.width() > 0:
+                        target = match.group(1).strip()
+                        links.append((rect, target, not self._link_resolver(target)))
+            block = block.next()
+        self._link_cache = links
+        return links
 
-        if item.checked:
-            border = accent
-        elif hovered:
-            border = accent
-        else:
-            border = muted
-        painter.setPen(QPen(border, 1.8))
-        painter.setBrush(accent if item.checked else Qt.BrushStyle.NoBrush)
-        painter.drawRoundedRect(box, 3, 3)
-
-        if not item.checked:
-            return
-        # Tick geometry is derived from the box so it stays centred and
-        # proportional at every font size.
-        painter.setPen(
-            QPen(on_accent, 2.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
-        )
-        left = QPointF(box.left() + size * 0.24, box.top() + size * 0.52)
-        middle = QPointF(box.left() + size * 0.43, box.top() + size * 0.72)
-        right = QPointF(box.left() + size * 0.76, box.top() + size * 0.30)
-        painter.drawLine(left, middle)
-        painter.drawLine(middle, right)
+    def _link_chip(self, rect: QRect) -> QRectF:
+        """Label rect grown into the design's chip: 7px each side, an 11px
+        link icon and a 4px gap before the label (on the right, for RTL)."""
+        extra = 4 + 11
+        grow = QRectF(rect).adjusted(-7, -2, 7, 2)
+        if self._is_rtl_document():
+            return grow.adjusted(0, 0, extra, 0)
+        return grow.adjusted(-extra, 0, 0, 0)
 
     def paintEvent(self, event):
+        under = QPainter(self.viewport())
+        under.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        row = self._current_row()
+        if row is not None:
+            under.save()
+            # The row runs on into both side areas; round only the far ends.
+            rounded(under, QRectF(-10, row.top(), self.viewport().width() + 20, row.height()),
+                    6, fill=col("current_line"))
+            under.restore()
+        for rect, _target, broken in self._visible_links():
+            chip = self._link_chip(rect)
+            rounded(under, chip, 6, fill=tint("danger" if broken else "accent", 0.1 if broken else 0.12))
+            icon_x = chip.right() - 7 - 11 if self._is_rtl_document() else chip.left() + 7
+            draw_icon(under, "link", QRectF(icon_x, chip.center().y() - 5.5, 11, 11),
+                      col("danger" if broken else "accent"), 1.7)
+            if broken:
+                pen = QPen(col("danger"), 1)
+                pen.setStyle(Qt.PenStyle.DashLine)
+                under.setPen(pen)
+                under.drawLine(QPointF(chip.left() + 7, chip.bottom() - 1),
+                               QPointF(chip.right() - 7, chip.bottom() - 1))
+        under.end()
+
         super().paintEvent(event)
 
         painter = QPainter(self.viewport())
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         theme = current_palette()
-        accent = QColor(theme["accent"])
 
-        # The date badge. The stamp's own characters are painted invisible
-        # by the highlighter and this is drawn over the space they reserve,
-        # so "@1405/06/05 17:13" reads as "امروز" while the file keeps the
-        # plain text it always had.
-        badge_font = QFont(self.font())
-        badge_font.setPointSizeF(
-            max(7.0, self.font().pointSizeF() * STAMP_TEXT_SCALE)
-        )
-        badge_metrics = QFontMetrics(badge_font)
-        for stamp_rect, label, overdue, done in self._visible_stamps():
-            if not stamp_rect.intersects(event.rect()):
+        # The date chip: the stamp's own characters are painted invisible by
+        # the highlighter and this is drawn over the room they reserve, so
+        # «@1405/07/03» reads as «امروز» while the file keeps plain text.
+        chip_font = design_font(11.5 * self._body_px() / BODY_PX)
+        for stamp_rect, label, overdue, _done in self._visible_stamps():
+            if not stamp_rect.intersects(event.rect()) or not label:
                 continue
-            if done:
-                colour = QColor(theme["muted"])
-            elif overdue:
-                colour = QColor(theme["danger"])
+            tone = "danger" if overdue else "accent"
+            width = 8 + 11 + 5 + text_width(label, chip_font) + 8
+            height = 22 * self._body_px() / BODY_PX
+            # 11px from the task's last word, as the design's flex gap puts it;
+            # the stamp's own room begins one space (~4px) after that word.
+            inset = STAMP_PAD_X + 7 * self._body_px() / BODY_PX
+            if self._is_rtl_document():
+                chip = QRectF(stamp_rect.right() - inset - width, stamp_rect.center().y() - height / 2,
+                              width, height)
+                icon_x = chip.right() - 8 - 11
+                text_rect = QRectF(chip.left() + 8, chip.top(), width - 16 - 11 - 5, height)
             else:
-                colour = QColor(theme["accent"])
+                chip = QRectF(stamp_rect.left() + inset, stamp_rect.center().y() - height / 2,
+                              width, height)
+                icon_x = chip.left() + 8
+                text_rect = QRectF(chip.left() + 8 + 11 + 5, chip.top(), width - 16 - 11 - 5, height)
+            rounded(painter, chip, 6, fill=tint(tone, 0.12))
+            draw_icon(painter, "calendar_small", QRectF(icon_x, chip.center().y() - 5.5, 11, 11),
+                      col(tone), 1.6)
+            draw_text(painter, text_rect, label, chip_font, col(tone), Qt.AlignmentFlag.AlignCenter,
+                      elide_text=False)
 
-            # Sized to the label, not to the hidden stamp. "@۱۴۰۵/۰۶/۱۷" is
-            # far wider than "امروز", and a pill drawn to the hidden run's
-            # width spilled over the words beside it.
-            pill = stamp_rect
-            if label:
-                wanted = badge_metrics.horizontalAdvance(label) + 2 * STAMP_PAD_X
-                if wanted < pill.width():
-                    pill = QRect(
-                        pill.center().x() - wanted // 2,
-                        pill.top(),
-                        wanted,
-                        pill.height(),
-                    )
-            painter.setPen(QPen(colour, 1.0))
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            radius = pill.height() / 2
-            painter.drawRoundedRect(pill, radius, radius)
-            if label:
-                painter.setFont(badge_font)
-                painter.drawText(
-                    pill,
-                    int(
-                        Qt.AlignmentFlag.AlignCenter
-                        | Qt.AlignmentFlag.AlignVCenter
-                    ),
-                    label,
-                )
-
+        scale = self._body_px() / BODY_PX
         for block, item, marker_rect in self._visible_list_markers():
             if not marker_rect.intersects(event.rect()):
                 continue
-
+            rtl = self._direction_for_text(block.text()) == "rtl"
             if item.kind == "bullet":
-                diameter = max(5, min(7, marker_rect.height() // 3))
-                dot = QRect(0, 0, diameter, diameter)
-                dot.moveCenter(marker_rect.center())
                 painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(accent)
-                painter.drawEllipse(dot)
+                painter.setBrush(col("accent"))
+                x = marker_rect.right() - 3 * scale if rtl else marker_rect.left() + 3 * scale
+                painter.drawEllipse(QPointF(x, marker_rect.center().y()), 3 * scale, 3 * scale)
             elif item.kind == "numbered":
                 painter.save()
-                font = QFont(self.font())
-                font.setBold(True)
-                font.setPointSizeF(max(9.0, self.font().pointSizeF()))
-                painter.setFont(font)
-                painter.setPen(accent)
-                painter.setBrush(Qt.BrushStyle.NoBrush)
-                # Numbers hug the text they belong to: right-aligned in an
-                # LTR paragraph, left-aligned when the marker sits on the
-                # right of an RTL one. An RTL paragraph shows Persian digits
-                # (display only — the file keeps ASCII digits), which also
-                # keeps the "." visible instead of being bidi-reordered away.
+                number_font = QFont(self.font())
+                number_font.setBold(True)
+                painter.setFont(number_font)
+                painter.setPen(col("accent"))
                 rtl = self._direction_for_text(block.text()) == "rtl"
-                alignment = (
-                    Qt.AlignmentFlag.AlignLeft if rtl else Qt.AlignmentFlag.AlignRight
-                )
-                # Draw the already-localized digits in a stable LTR run. Qt's
-                # bidi reordering could otherwise move the punctuation over
-                # the digit or paint part of it outside the marker rectangle.
+                alignment = Qt.AlignmentFlag.AlignLeft if rtl else Qt.AlignmentFlag.AlignRight
                 painter.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
-                painter.drawText(
-                    marker_rect,
-                    int(
-                        alignment
-                        | Qt.AlignmentFlag.AlignVCenter
-                    ),
-                    display_number_marker(item.marker, rtl),
-                )
+                painter.drawText(marker_rect, int(alignment | Qt.AlignmentFlag.AlignVCenter),
+                                 display_number_marker(item.marker, rtl))
                 painter.restore()
             else:
-                self._paint_checkbox(
-                    painter,
-                    marker_rect,
-                    item,
-                    block.blockNumber() == self._hovered_checkbox_block,
-                    theme,
-                )
-
+                # The box sits in the first 20px of the marker's room.
+                x = marker_rect.right() - 10 * scale if rtl else marker_rect.left() + 10 * scale
+                hovered = block.blockNumber() == self._hovered_checkbox_block
+                draw_checkbox(painter, QPointF(x, marker_rect.center().y()), 16 * scale, 5 * scale,
+                              item.checked, border=col("accent" if hovered else "box"),
+                              check_size=11 * scale)
         painter.end()
 
     def _checkbox_at(self, point) -> QTextCursor | None:
@@ -933,8 +1188,19 @@ class SmartEditor(QTextEdit):
             return toggle
         return None
 
+    def _link_at(self, point) -> str | None:
+        for rect, target, _broken in self._visible_links():
+            if self._link_chip(rect).contains(QPointF(point)):
+                return target
+        return None
+
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton and not event.modifiers():
+            target = self._link_at(event.position().toPoint())
+            if target is not None:
+                self.link_clicked.emit(target)
+                event.accept()
+                return
             toggle = self._checkbox_at(event.position().toPoint())
             if toggle is not None:
                 checked = toggle.selectedText() in ("x", "X")
@@ -959,9 +1225,10 @@ class SmartEditor(QTextEdit):
         if hovered_block != self._hovered_checkbox_block:
             self._hovered_checkbox_block = hovered_block
             self.viewport().update()
+        on_link = not event.buttons() and self._link_at(event.position().toPoint()) is not None
         self.viewport().setCursor(
             Qt.CursorShape.PointingHandCursor
-            if toggle is not None
+            if toggle is not None or on_link
             else Qt.CursorShape.IBeamCursor
         )
         super().mouseMoveEvent(event)

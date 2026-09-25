@@ -45,7 +45,7 @@ class _ScanWorker(QThread):
 class TaskWatcher(QObject):
     # (done, total) for today — drives the progress meter in the tab strip.
     progress_changed = pyqtSignal(int, int)
-    # How many tasks are still open — shown on the top bar's tasks button.
+    # Open tasks due today or earlier — the badge on the rail's tasks button.
     open_count_changed = pyqtSignal(int)
     # A scan finished; whatever is on screen may now be stale.
     scanned = pyqtSignal()
@@ -92,7 +92,12 @@ class TaskWatcher(QObject):
         self._tasks = tasks
         done, total = today_progress(tasks, datetime.now())
         self.progress_changed.emit(done, total)
-        self.open_count_changed.emit(sum(1 for t in tasks if not t.done))
+        # Due today or already late — what the rail badge and the greeting
+        # mean by «کار برای امروز مانده». Undated work is not pressing.
+        today = datetime.now().date()
+        self.open_count_changed.emit(
+            sum(1 for t in tasks if not t.done and t.due and t.due.date() <= today)
+        )
         self.scanned.emit()
 
     def stop(self):

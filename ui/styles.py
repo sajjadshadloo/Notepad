@@ -99,8 +99,76 @@ PALETTES = {
 
 DEFAULT_PALETTE = "graphite"
 
-# The eleven token names every palette half must define. Anything that reads
-# a colour reads one of these.
+# The v4 design paints with more steps of grey than the eleven base tokens
+# carry: a darker band for the chrome, a panel between window and card, soft
+# dividers, and four text weights between muted and full. Graphite dark takes
+# the design's own values; every other half derives them from its base eleven,
+# so a palette is still only those eleven choices.
+DESIGN_TOKENS = {
+    "chrome": "#16171b",        # top bar, rail, settings navigation
+    "panel": "#1c1d22",         # sidebars, today column, tab strip, status bar
+    "divider": "#25272d",       # region borders; row hover
+    "line": "#2f323a",          # input and button borders
+    "box": "#4a4d57",           # an empty checkbox, the breadcrumb slash
+    "gutter": "#5c606b",        # line numbers
+    "faint": "#7d818c",         # a task's source, weekday initials
+    "soft": "#c8cad1",          # secondary labels that still need reading
+    "body": "#d7d9de",          # paragraph text in the editor and on cards
+    "well_hover": "#1f2126",    # the search well and month cells on hover
+    "current_line": "#1e2025",  # the editor's current line
+}
+
+
+def _mix(first: str, second: str, amount: float) -> str:
+    a = [int(first[i:i + 2], 16) for i in (1, 3, 5)]
+    b = [int(second[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(
+        f"{round(x + (y - x) * amount):02x}" for x, y in zip(a, b)
+    )
+
+
+def _derive(half: dict, dark: bool) -> dict:
+    w, s, sa, h, b = (half[k] for k in ("window", "surface", "surface_alt", "hover", "border"))
+    t, m = half["text"], half["muted"]
+    if dark:
+        return {
+            "chrome": _mix(w, "#000000", 0.12),
+            "panel": _mix(w, s, 0.37),
+            "divider": _mix(s, sa, 0.45),
+            "line": _mix(sa, h, 0.72),
+            "box": _mix(b, m, 0.17),
+            "gutter": _mix(b, m, 0.38),
+            "faint": _mix(b, m, 0.73),
+            "soft": _mix(m, t, 0.6),
+            "body": _mix(m, t, 0.78),
+            "well_hover": _mix(w, s, 0.75),
+            "current_line": _mix(w, s, 0.6),
+        }
+    return {
+        "chrome": _mix(w, t, 0.035),
+        "panel": _mix(w, sa, 0.5),
+        "divider": _mix(sa, b, 0.5),
+        "line": b,
+        "box": _mix(b, m, 0.35),
+        "gutter": _mix(b, m, 0.55),
+        "faint": _mix(b, m, 0.8),
+        "soft": _mix(m, t, 0.55),
+        "body": _mix(m, t, 0.8),
+        "well_hover": _mix(w, sa, 0.6),
+        "current_line": _mix(w, sa, 0.5),
+    }
+
+
+for _name, _pair in PALETTES.items():
+    for _half_name in ("dark", "light"):
+        _half = _pair[_half_name]
+        if _name == DEFAULT_PALETTE and _half_name == "dark":
+            _half.update(DESIGN_TOKENS)
+        else:
+            _half.update(_derive(_half, _half_name == "dark"))
+
+# The token names every palette half must define. Anything that reads a
+# colour reads one of these.
 TOKENS = tuple(PALETTES[DEFAULT_PALETTE]["dark"])
 
 # Kept as names because the shortcuts sheet and older call sites ask for the
@@ -374,9 +442,12 @@ QTabBar::tab:selected {{
 
 QTextEdit {{
     background: {t['window']};
-    color: {t['text']};
+    /* Paragraphs in the design's body grey; headings and tasks are set to
+       the full text colour by the highlighter. The page's margins are the
+       editor's own (see ui/editor.py), not padding. */
+    color: {t['body']};
     border: none;
-    padding: 22px 26px;
+    padding: 0;
     /* A wash of the accent, and the text keeps its own colour. A solid fill
        hid what you had just selected and flattened the Markdown colouring
        underneath it. */

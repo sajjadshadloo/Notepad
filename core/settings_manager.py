@@ -29,7 +29,13 @@ DEFAULTS = {
     # you the Persian one. The editor builds a fallback chain from the pair.
     "font_family_latin": "Inter",
     "font_family_persian": "Vazirmatn",
-    "font_size": 14,
+    # CSS pixels since 4.3 ("font_size_unit": "px" marks a converted file;
+    # it is deliberately not a default, so an older file is still converted).
+    "font_size": 14.5,
+    "close_to_tray": True,
+    "home_view": "grid",
+    "pinned_notes": [],
+    "display_name": "سجاد",
     "theme": "system",
     # Which set of eleven colour tokens the theme picks its half from.
     # See ui.styles.PALETTES; an unknown name falls back to the default.

@@ -19,10 +19,31 @@ NOTE_EXTENSIONS = (".txt", ".md", ".markdown")
 # A card shows a handful of lines, so there is no reason to look at more of
 # a long note than that. 39 KB notes exist in real folders.
 PREVIEW_CHARS = 2000
-PREVIEW_LINES = 4
-PREVIEW_TASKS = 6
+PREVIEW_LINES = 3
+PREVIEW_TASKS = 4
 
 ROOT_LABEL = "عمومی"
+
+# Folder names on disk are English so agents and scripts can find them; the
+# app shows them in Persian. A folder not listed here shows as it is named.
+FOLDER_LABELS = {
+    "projects": "پروژه‌ها",
+    "ideas": "ایده‌ها",
+    "inbox": "ورودی‌ها",
+    "me": "من",
+    "private": "خصوصی",
+    "archive": "بایگانی",
+    "daily": "روزانه",
+    "sites": "سایت‌ها",
+    "personal": "شخصی",
+}
+
+
+def display_name(folder: str) -> str:
+    """How a folder (or the root, as "") is labelled on screen."""
+    if not folder:
+        return ROOT_LABEL
+    return FOLDER_LABELS.get(folder.casefold(), folder)
 
 
 @dataclass(frozen=True)
@@ -44,7 +65,7 @@ class NoteCard:
     @property
     def category(self) -> str:
         """The tab this card belongs under."""
-        return self.folder or ROOT_LABEL
+        return display_name(self.folder)
 
 
 def _strip_stamp(line: str) -> str:
@@ -121,6 +142,34 @@ def load_library(root: str | Path) -> list[NoteCard]:
         cards.append(summarise(loaded.text, path, folder, modified))
     cards.sort(key=lambda card: card.modified, reverse=True)
     return cards
+
+
+def edited_label(modified: float, now: float | None = None) -> str:
+    """«۱۰ دقیقه پیش», «۲ ساعت پیش», «دیروز» — how long ago a note changed."""
+    import time
+    from datetime import date as _date, datetime as _datetime
+
+    from core.jalali import MONTHS, from_gregorian, to_persian_digits
+
+    now = time.time() if now is None else now
+    seconds = max(0.0, now - modified)
+    then = _datetime.fromtimestamp(modified)
+    today = _datetime.fromtimestamp(now).date()
+    days = (today - then.date()).days
+    if seconds < 60:
+        return "همین حالا"
+    if seconds < 3600:
+        return to_persian_digits(str(int(seconds // 60))) + " دقیقه پیش"
+    if days == 0:
+        return to_persian_digits(str(int(seconds // 3600))) + " ساعت پیش"
+    if days == 1:
+        return "دیروز"
+    if days < 7:
+        return to_persian_digits(str(days)) + " روز پیش"
+    if days < 14:
+        return "هفته‌ی پیش"
+    _, month, day = from_gregorian(_date(then.year, then.month, then.day))
+    return to_persian_digits(str(day)) + " " + MONTHS[month - 1]
 
 
 def categories(cards: list[NoteCard]) -> list[str]:

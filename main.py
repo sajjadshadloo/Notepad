@@ -140,16 +140,23 @@ def main() -> int:
             settings.get("accent_palette", "graphite"),
         )
     )
-    ui_font = QFont()
-    ui_font.setFamilies(sm.font_chain(settings, extra=("sans-serif",)))
-    ui_font.setPointSize(10)
-    app.setFont(ui_font)
+    # The v4 design sets all its chrome in Vazirmatn at 13px; widgets the
+    # design does not paint (menus, message boxes) follow the same.
+    from ui.kit import font as design_font
+
+    app.setFont(design_font(13))
 
     _mark("theme")
     window = MainWindow(initial_files)
     _mark("MainWindow")
     guard.files_received.connect(window.open_from_another_instance)
-    window.show()
+    window.register_global_hotkey()
+    if "--minimized" in sys.argv and window.has_tray():
+        # Started with Windows: wait in the tray, but keep the day's work
+        # (and the desktop widget, if it was on) up to date.
+        QTimer.singleShot(0, window.start_in_background)
+    else:
+        window.show()
     _mark("show")
     # Logged from the event loop so it measures the moment the window is
     # actually usable, not just the moment show() returned.

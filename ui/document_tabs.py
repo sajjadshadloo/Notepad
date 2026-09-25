@@ -25,7 +25,8 @@ class DocumentTabs(QWidget):
     def __init__(self, bar: QTabBar, parent=None):
         super().__init__(parent)
         self.setObjectName("documentTabs")
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        # Tabs start at the right edge, the + after the last one.
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self._bar = bar
         self._bar.setParent(self)
         self.pages = QStackedWidget()
