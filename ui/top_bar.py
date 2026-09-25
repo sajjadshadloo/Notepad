@@ -23,13 +23,13 @@ from PyQt6.QtWidgets import (
 from ui.icons import icon, icon_size
 from ui.styles import current_palette
 
-PAGES = (("home", "خانه"), ("editor", "ویرایش"))
+PAGES = (("home", "خانه"), ("editor", "ویرایش"), ("tasks", "کارها"), ("calendar", "تقویم"))
 
-BAR_HEIGHT = 44
-SIDE_BLOCK = 270
-SEARCH_MAX_WIDTH = 440
-BUTTON_SIZE = 28
-BRAND_SIZE = 16
+BAR_HEIGHT = 48
+SIDE_BLOCK = 300
+SEARCH_MAX_WIDTH = 460
+BUTTON_SIZE = 30
+BRAND_SIZE = 24
 
 
 class _IconButton(QToolButton):
@@ -73,6 +73,7 @@ class TopBar(QWidget):
     theme_toggled = pyqtSignal()
     settings_requested = pyqtSignal()
     sync_requested = pyqtSignal()
+    quick_capture_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -111,38 +112,24 @@ class TopBar(QWidget):
         self.brand.setFixedSize(BRAND_SIZE, BRAND_SIZE)
         row.addWidget(self.brand)
 
-        # The whole app is these three, so the switch is the first thing on
-        # the bar rather than something to find in a menu.
-        switch = QWidget()
-        switch.setObjectName("segmented")
-        switch.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        switch.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        switch_row = QHBoxLayout(switch)
-        switch_row.setContentsMargins(0, 0, 0, 0)
-        switch_row.setSpacing(2)
-        self.page_buttons: dict[str, QToolButton] = {}
-        for key, label in PAGES:
-            button = QToolButton()
-            button.setText(label)
-            button.setCheckable(True)
-            button.setCursor(Qt.CursorShape.PointingHandCursor)
-            button.setSizePolicy(
-                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-            )
-            button.clicked.connect(
-                lambda _checked=False, chosen=key: self.page_requested.emit(chosen)
-            )
-            switch_row.addWidget(button, 1)
-            self.page_buttons[key] = button
-        row.addWidget(switch, 1)
+        self.brand_name = QLabel("نوت‌پد پلاس")
+        self.brand_name.setObjectName("brandName")
+        row.addWidget(self.brand_name)
+        slash = QLabel("/")
+        slash.setObjectName("breadcrumb")
+        row.addWidget(slash)
+        self.breadcrumb = QLabel("خانه · همه")
+        self.breadcrumb.setObjectName("breadcrumb")
+        row.addWidget(self.breadcrumb, 1)
+        self.page_buttons = {}
         return block
 
     def set_widget_active(self, active: bool):
         self.widget_button.setChecked(active)
 
     def set_page(self, key: str):
-        for name, button in self.page_buttons.items():
-            button.setChecked(name == key)
+        labels = dict(PAGES)
+        self.breadcrumb.setText(labels.get(key, "خانه"))
 
     # Centre: the one search field
 
@@ -218,6 +205,12 @@ class TopBar(QWidget):
         row.setSpacing(2)
         row.addStretch(1)
 
+        self.quick_button = _IconButton("quick", "ضبط سریع — Alt+N", size=14)
+        self.quick_button.setText("ضبط سریع")
+        self.quick_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.quick_button.clicked.connect(self.quick_capture_requested)
+        row.addWidget(self.quick_button)
+
         self.sync_button = QToolButton()
         self.sync_button.setObjectName("syncButton")
         self.sync_button.setText("همگام‌سازی…")
@@ -270,6 +263,7 @@ class TopBar(QWidget):
             self.widget_button,
             self.theme_button,
             self.settings_button,
+            self.quick_button,
         ):
             button.refresh()
         self.search_icon.setPixmap(

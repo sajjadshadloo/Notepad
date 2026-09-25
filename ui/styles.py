@@ -680,6 +680,12 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
     color: {t['on_accent']};
     font-weight: 700;
 }}
+#calendarPanel {{ background: {t['window']}; }}
+#calendarDay[chosen="true"][expanded="true"] {{
+    background: {t['window']};
+    color: {t['accent']};
+    border: 2px solid {t['accent']};
+}}
 
 /* The @ button's scheduling popup. */
 #stampPicker {{
@@ -936,4 +942,79 @@ QSlider::handle:horizontal {{
     font-weight: 600;
     padding: 2px 4px;
 }}
+#calendarDay[expanded="true"] {{
+    background: {t['window']};
+    border-color: {t['border']};
+    border-radius: 10px;
+    font-size: 13px;
+}}
+#calendarDay[empty="true"] {{ color: transparent; background: {t['window']}; }}
+
+/* Final V4 shell. */
+#navigationRail {{
+    background: {t['window']};
+    border-left: 1px solid {t['border']};
+}}
+#railButton {{
+    background: transparent;
+    border: none;
+    border-radius: 11px;
+    color: {t['muted']};
+    font-size: 10px;
+    padding: 5px 0 3px;
+}}
+#railButton:hover {{ background: {t['hover']}; color: {t['text']}; }}
+#railButton:checked {{ background: {t['surface_alt']}; color: {t['accent']}; }}
+#folderSidebar {{
+    background: {t['surface']};
+    border-left: 1px solid {t['border']};
+}}
+#sidebarSectionLabel {{
+    color: {t['muted']};
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+}}
+#sidebarRule {{ background: {t['border']}; margin: 8px 6px; }}
+#folderButton {{
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    color: {t['text']};
+    padding: 0 10px;
+    text-align: right;
+    font-size: 12px;
+}}
+#folderButton:hover {{ background: {t['hover']}; }}
+#folderButton:checked {{ background: {t['surface_alt']}; color: {t['accent']}; }}
+#folderPathCard {{
+    background: {t['window']};
+    border: 1px solid {t['border']};
+    border-radius: 10px;
+    color: {t['muted']};
+    font-size: 10px;
+    padding: 9px;
+}}
+#workspaceTitle {{ color: {t['text']}; font-size: 22px; font-weight: 700; }}
+#workspaceSubtitle {{ color: {t['muted']}; font-size: 11px; }}
+#tasksWorkspace {{ background: {t['window']}; }}
+#modeButton {{
+    background: transparent;
+    border: none;
+    border-radius: 7px;
+    color: {t['muted']};
+    padding: 7px 14px;
+}}
+#modeButton:hover {{ color: {t['text']}; background: {t['hover']}; }}
+#modeButton:checked {{ color: {t['text']}; background: {t['surface_alt']}; }}
+#quickCapture {{ background: {t['surface']}; }}
+#captureText {{
+    background: {t['window']};
+    border: 1px solid {t['border']};
+    border-radius: 10px;
+    color: {t['text']};
+    padding: 10px;
+}}
+#brandName {{ color: {t['text']}; font-size: 12px; font-weight: 700; }}
+#breadcrumb {{ color: {t['muted']}; font-size: 11px; }}
 """

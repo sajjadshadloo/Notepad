@@ -18,12 +18,12 @@ VSVersionInfo(
           [
             StringStruct('CompanyName', 'Sajjad Shadloo'),
             StringStruct('FileDescription', 'Notepad Plus - fast bilingual text editor'),
-            StringStruct('FileVersion', '4.2.5.0'),
+            StringStruct('FileVersion', '4.2.6.0'),
             StringStruct('InternalName', 'NotepadPlus'),
             StringStruct('LegalCopyright', '(c) 2026 Sajjad Shadloo'),
             StringStruct('OriginalFilename', 'NotepadPlus.exe'),
             StringStruct('ProductName', 'Notepad Plus'),
-            StringStruct('ProductVersion', '4.2.5.0'),
+            StringStruct('ProductVersion', '4.2.6.0'),
           ],
         )
       ]

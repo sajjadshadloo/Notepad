@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
     QDialog,
     QFileDialog,
     QHBoxLayout,
+    QBoxLayout,
     QInputDialog,
     QLabel,
     QLineEdit,
@@ -79,6 +80,10 @@ from ui.shortcuts_dialog import ShortcutsDialog
 from ui.day_widget import DayWidget
 from ui.today_rail import TodayRail
 from ui.notes_board import NotesBoard
+from ui.folder_sidebar import FolderSidebar
+from ui.navigation_rail import NavigationRail
+from ui.tasks_workspace import TasksWorkspace
+from ui.quick_capture import QuickCaptureDialog
 from ui.styles import build_stylesheet, current_palette, resolve_theme
 
 log = logging.getLogger(__name__)
@@ -87,7 +92,7 @@ log = logging.getLogger(__name__)
 TAB_DOT_SIZE = 6
 
 APP_TITLE = "Notepad Plus"
-APP_VERSION = "4.2.5"
+APP_VERSION = "4.2.6"
 
 # Line endings, as characters rather than an escape.
 NEWLINE_CHARS = chr(13) + chr(10)
@@ -446,8 +451,8 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle(APP_TITLE)
         self.setWindowIcon(_app_icon())
-        self.setMinimumSize(720, 480)
-        self.resize(1060, 720)
+        self.setMinimumSize(1180, 680)
+        self.resize(1360, 820)
         self.setAcceptDrops(True)
 
         self._build_actions()
@@ -850,6 +855,7 @@ class MainWindow(QMainWindow):
         )
 
         self.notes_board = NotesBoard(self._cfg["notes_root"])
+        self.notes_board.set_sidebar_mode(True)
         self.notes_board.note_activated.connect(self.open_note_from_board)
         self.notes_board.note_delete_requested.connect(self.delete_note)
         self.notes_board.new_note_requested.connect(self.new_note_from_board)
@@ -861,6 +867,15 @@ class MainWindow(QMainWindow):
         self.rail.task_opened.connect(self.open_task_in_editor)
         self.rail.file_requested.connect(self.open_tasks_file)
 
+        self.folder_sidebar = FolderSidebar(self._cfg["notes_root"])
+        self.folder_sidebar.category_selected.connect(self.notes_board.show_category)
+        self.folder_sidebar.tasks_requested.connect(lambda: self.show_page("tasks"))
+
+        # The full month owns dozens of widgets. Build it only when the user
+        # first visits Tasks/Calendar so ordinary editor startup stays lean.
+        self.tasks_workspace: TasksWorkspace | None = None
+        self._tasks_placeholder = QWidget()
+
         # Home: the notes on the left, today on the right, both at once. The
         # calendar used to be a page of its own, which put three moves
         # between wanting to tick something off and doing it.
@@ -868,6 +883,8 @@ class MainWindow(QMainWindow):
         home_row = QHBoxLayout(home)
         home_row.setContentsMargins(0, 0, 0, 0)
         home_row.setSpacing(0)
+        home_row.setDirection(QBoxLayout.Direction.RightToLeft)
+        home_row.addWidget(self.folder_sidebar)
         home_row.addWidget(self.notes_board, 1)
         home_row.addWidget(self.rail)
 
@@ -885,6 +902,11 @@ class MainWindow(QMainWindow):
         self.pages = QStackedWidget()
         self.pages.addWidget(home)
         self.pages.addWidget(editor_page)
+        self.pages.addWidget(self._tasks_placeholder)
+
+        self.navigation_rail = NavigationRail()
+        self.navigation_rail.page_requested.connect(self.show_page)
+        self.navigation_rail.settings_requested.connect(self.show_settings)
 
         self.top_bar = TopBar()
         self.top_bar.search_requested.connect(self.show_quick_open)
@@ -894,13 +916,21 @@ class MainWindow(QMainWindow):
         self.top_bar.widget_toggled.connect(self.toggle_day_widget)
         self.top_bar.page_requested.connect(self.show_page)
         self.top_bar.sync_requested.connect(self.sync_now)
+        self.top_bar.quick_capture_requested.connect(self.show_quick_capture)
 
         shell = QWidget()
         column = QVBoxLayout(shell)
         column.setContentsMargins(0, 0, 0, 0)
         column.setSpacing(0)
         column.addWidget(self.top_bar)
-        column.addWidget(self.pages, 1)
+        body = QWidget()
+        body_row = QHBoxLayout(body)
+        body_row.setContentsMargins(0, 0, 0, 0)
+        body_row.setSpacing(0)
+        body_row.setDirection(QBoxLayout.Direction.RightToLeft)
+        body_row.addWidget(self.navigation_rail)
+        body_row.addWidget(self.pages, 1)
+        column.addWidget(body, 1)
         self.setCentralWidget(shell)
 
         # Save state leads on the left, where the eye lands first — it is the
@@ -974,9 +1004,9 @@ class MainWindow(QMainWindow):
         return holder
 
     def update_open_task_count(self, count: int):
-        self.top_bar.set_open_task_count(
-            to_persian_digits(str(count)) if count else ""
-        )
+        label = to_persian_digits(str(count)) if count else ""
+        self.top_bar.set_open_task_count(label)
+        self.navigation_rail.set_task_count(label)
 
     def update_today_meter(self, done: int, total: int):
         self._today_meter_holder.setVisible(total > 0)
@@ -1871,6 +1901,7 @@ class MainWindow(QMainWindow):
         self._cfg["notes_root"] = folder
         settings_manager.save(self._cfg)
         self.notes_board.set_root(folder)
+        self.folder_sidebar.set_root(folder)
         if self._tasks_watcher is not None:
             self._tasks_watcher.set_root(folder)
         self.sync_now()
@@ -1971,6 +2002,7 @@ class MainWindow(QMainWindow):
         )
         self._dot_icons.clear()
         self.top_bar.refresh_palette()
+        self.navigation_rail.refresh_palette()
         self._find_toolbar_action.setIcon(
             icon("search", current_palette()["muted"], 13)
         )
@@ -2270,14 +2302,19 @@ class MainWindow(QMainWindow):
     # Pages
 
     # "home" is the notes and the rail together; "editor" is a document.
-    PAGE_INDEX = {"home": 0, "editor": 1}
+    PAGE_INDEX = {"home": 0, "editor": 1, "tasks": 2, "calendar": 2}
 
     def show_page(self, key: str):
+        if key in {"tasks", "calendar"}:
+            self._ensure_tasks_workspace()
         index = self.PAGE_INDEX.get(key)
         if index is None:
             return
         self.pages.setCurrentIndex(index)
         self.top_bar.set_page(key)
+        self.navigation_rail.set_page(key)
+        if key in {"tasks", "calendar"} and self.tasks_workspace is not None:
+            self.tasks_workspace.set_mode("calendar" if key == "calendar" else "tasks")
         # Cursor position, word count and the encoding chip describe a
         # document; on the home screen there is none to describe.
         self.statusBar().setVisible(key == "editor")
@@ -2287,11 +2324,16 @@ class MainWindow(QMainWindow):
         # on the way in rather than trusting what it last drew.
         if key == "home":
             self.notes_board.reload()
+            self.folder_sidebar.set_categories(
+                self.notes_board.category_names(), self.notes_board.category_counts()
+            )
             self.refresh_tasks()
-        else:
+        elif key == "editor":
             tab = self.current_document()
             if tab:
                 tab.editor.setFocus()
+        else:
+            self.refresh_tasks()
 
     def open_note_from_board(self, path: str):
         if self.open_file(path):
@@ -2310,8 +2352,26 @@ class MainWindow(QMainWindow):
         if self._tasks_watcher is None:
             self._start_task_watcher()
         if self._tasks_watcher is not None:
-            self.rail.set_tasks(self._tasks_watcher.all_tasks())
+            tasks = self._tasks_watcher.all_tasks()
+            self.rail.set_tasks(tasks)
+            if self.tasks_workspace is not None:
+                self.tasks_workspace.set_tasks(tasks)
             self._tasks_watcher.check_now()
+
+    def _ensure_tasks_workspace(self):
+        if self.tasks_workspace is not None:
+            return
+        workspace = TasksWorkspace()
+        workspace.task_toggled.connect(self.set_task_done)
+        workspace.task_delete_requested.connect(self.delete_task)
+        workspace.task_opened.connect(self.open_task_in_editor)
+        workspace.task_added.connect(self._workspace_add_task)
+        self.pages.insertWidget(2, workspace)
+        self.pages.removeWidget(self._tasks_placeholder)
+        self._tasks_placeholder.deleteLater()
+        self.tasks_workspace = workspace
+        if self._tasks_watcher is not None:
+            workspace.set_tasks(self._tasks_watcher.all_tasks())
 
     def _add_day_task(self, day, text: str):
         if not self.add_task_to_day(day, text):
@@ -2321,6 +2381,38 @@ class MainWindow(QMainWindow):
         # stay empty, which reads as nothing having happened.
         self._reread_tasks_for(day)
         self.statusBar().showMessage("کار اضافه شد", 2500)
+
+    def _workspace_add_task(self, day, text: str):
+        if text.strip():
+            self._add_day_task(day, text)
+        else:
+            self.show_quick_capture(day)
+
+    def show_quick_capture(self, day=None):
+        dialog = QuickCaptureDialog(self, day)
+        dialog.task_submitted.connect(self._add_day_task)
+        dialog.note_submitted.connect(self._save_quick_note)
+        dialog.exec()
+
+    def _save_quick_note(self, text: str):
+        """Write a captured thought into the real notes folder.
+
+        A timestamp keeps the operation collision-free; the first line is
+        retained as the visible Markdown heading, matching the mobile app.
+        """
+        root = Path(self._cfg["notes_root"])
+        inbox = root / "ورودی‌ها"
+        inbox.mkdir(parents=True, exist_ok=True)
+        first = next((line.strip("# ") for line in text.splitlines() if line.strip()), "یادداشت سریع")
+        safe = "".join(ch for ch in first[:36] if ch not in '<>:"/\\|?*').strip() or "یادداشت سریع"
+        path = inbox / f"{datetime.now():%Y%m%d-%H%M%S}-{safe}.md"
+        body = text if text.lstrip().startswith("#") else f"# {first}\n\n{text}"
+        write_text_file_atomic(str(path), body, "UTF-8")
+        self.notes_board.reload()
+        self.folder_sidebar.set_categories(
+            self.notes_board.category_names(), self.notes_board.category_counts()
+        )
+        self.statusBar().showMessage("یادداشت در ورودی‌ها ذخیره شد", 2500)
 
     def _reread_tasks_for(self, day):
         path = task_file.path_for(self._cfg["notes_root"])
@@ -2351,11 +2443,17 @@ class MainWindow(QMainWindow):
         self._tasks_watcher.open_count_changed.connect(self.update_open_task_count)
         # The calendar redraws from every completed scan, so a change made in
         # the editor shows up there without anyone asking.
-        self._tasks_watcher.scanned.connect(
-            lambda: self.rail.set_tasks(self._tasks_watcher.all_tasks())
-        )
+        self._tasks_watcher.scanned.connect(self._update_task_surfaces)
         self._tasks_watcher.scanned.connect(self.refresh_day_widget)
         self._tasks_watcher.start()
+
+    def _update_task_surfaces(self):
+        if self._tasks_watcher is None:
+            return
+        tasks = self._tasks_watcher.all_tasks()
+        self.rail.set_tasks(tasks)
+        if self.tasks_workspace is not None:
+            self.tasks_workspace.set_tasks(tasks)
 
     def _tab_for_pending(self, path: str) -> DocumentTab | None:
         """An open, still-unsaved document already aimed at this filename."""

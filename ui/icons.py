@@ -17,6 +17,20 @@ from PyQt6.QtSvg import QSvgRenderer
 
 # Straight from the design's markup.
 PATHS = {
+    "home": (
+        '<path d="M2 7.2 8 2l6 5.2v6.3H9.7V9.4H6.3v4.1H2z"></path>'
+    ),
+    "editor": (
+        '<path d="M3 2.2h7l3 3v8.6H3z"></path>'
+        '<path d="M10 2.2v3h3M5.5 8h5M5.5 10.5h4"></path>'
+    ),
+    "calendar": (
+        '<rect x="2" y="3.5" width="12" height="10.5" rx="2"></rect>'
+        '<path d="M5 2v3M11 2v3M2 7h12"></path>'
+    ),
+    "quick": (
+        '<path d="M9 1.8 3.5 9h4l-1 5.2L12.5 7h-4z"></path>'
+    ),
     "sidebar": (
         '<rect x="1.5" y="2.5" width="13" height="11" rx="2"></rect>'
         '<line x1="6" y1="2.5" x2="6" y2="13.5"></line>'

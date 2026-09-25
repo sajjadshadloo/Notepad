@@ -26,7 +26,7 @@ from core.tasks import Task, group_of
 from ui.calendar_panel import CalendarPanel
 from ui.task_rows import TaskList
 
-RAIL_WIDTH = 306
+RAIL_WIDTH = 340
 
 
 class TodayRail(QWidget):

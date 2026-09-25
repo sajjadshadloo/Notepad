@@ -34,6 +34,7 @@ class NotesBoard(QWidget):
         self._root = root
         self._cards: list = []
         self._category = ALL_LABEL
+        self._sidebar_mode = False
 
         column = QVBoxLayout(self)
         column.setContentsMargins(18, 14, 18, 16)
@@ -55,6 +56,17 @@ class NotesBoard(QWidget):
         row = QHBoxLayout()
         row.setSpacing(10)
 
+        titles = QVBoxLayout()
+        titles.setSpacing(1)
+        self._title = QLabel("همهٔ یادداشت‌ها")
+        self._title.setObjectName("workspaceTitle")
+        self._subtitle = QLabel()
+        self._subtitle.setObjectName("workspaceSubtitle")
+        titles.addWidget(self._title)
+        titles.addWidget(self._subtitle)
+        row.addLayout(titles)
+        row.addStretch(1)
+
         self._tabs_holder = QWidget()
         self._tabs_holder.setObjectName("segmented")
         self._tabs_holder.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -70,7 +82,6 @@ class NotesBoard(QWidget):
         new_button.clicked.connect(self.new_note_requested)
 
         row.addWidget(self._tabs_holder)
-        row.addStretch(1)
         row.addWidget(new_button)
         return row
 
@@ -100,7 +111,7 @@ class NotesBoard(QWidget):
     def _rebuild_tabs(self):
         names = [ALL_LABEL] + categories(self._cards)
         # Only one folder plus "همه" is two buttons saying the same thing.
-        self._tabs_holder.setVisible(len(names) > 2)
+        self._tabs_holder.setVisible(not self._sidebar_mode and len(names) > 2)
         while self._tabs_row.count():
             item = self._tabs_row.takeAt(0)
             widget = item.widget()
@@ -133,6 +144,8 @@ class NotesBoard(QWidget):
         shown = in_category(
             self._cards, "" if self._category == ALL_LABEL else self._category
         )
+        self._title.setText("همهٔ یادداشت‌ها" if self._category == ALL_LABEL else self._category)
+        self._subtitle.setText(to_persian_digits(str(len(shown))) + " یادداشت")
         self.grid.show_cards(shown)
         self.grid.setVisible(bool(shown))
         self._empty.setVisible(not shown)
@@ -142,3 +155,15 @@ class NotesBoard(QWidget):
 
     def category_names(self) -> list[str]:
         return list(self._buttons)
+
+    def category_counts(self) -> dict[str, int]:
+        return {
+            name: len(in_category(self._cards, "" if name == ALL_LABEL else name))
+            for name in self.category_names()
+        }
+
+    def set_sidebar_mode(self, enabled: bool = True):
+        self._sidebar_mode = bool(enabled)
+        self._tabs_holder.setVisible(
+            not self._sidebar_mode and len(self.category_names()) > 2
+        )

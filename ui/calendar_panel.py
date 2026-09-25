@@ -36,11 +36,13 @@ FRIDAY_COLUMN = 6
 class CalendarPanel(QWidget):
     day_activated = pyqtSignal(date)
 
-    def __init__(self, root: str = "", parent=None):
+    def __init__(self, root: str = "", parent=None, expanded: bool = False):
         super().__init__(parent)
         self.setObjectName("calendarPanel")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self._root = root
+        self._expanded = bool(expanded)
         # Days that have at least one task. Set by whoever owns the tasks.
         self._marked: set = set()
         self._selected = date.today()
@@ -89,6 +91,11 @@ class CalendarPanel(QWidget):
         self._root = root
         self.refresh()
 
+    def set_expanded(self, expanded: bool = True):
+        """Use the generous month cells from the full V4 calendar page."""
+        self._expanded = bool(expanded)
+        self.refresh()
+
     def set_marked_days(self, days):
         """Which days to show as carrying work."""
         marked = set(days)
@@ -124,15 +131,22 @@ class CalendarPanel(QWidget):
 
         today = date.today()
         row = 1
+        occupied = set()
         for day in month_days(self._year, self._month):
             column = column_of(day)
             _, _, jd = from_gregorian(day)
             cell = QToolButton()
             cell.setText(to_persian_digits(str(jd)))
-            cell.setAutoRaise(True)
+            cell.setAutoRaise(not self._expanded)
+            cell.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             cell.setCursor(Qt.CursorShape.PointingHandCursor)
-            cell.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            cell.setMinimumSize(QSize(24, 24))
+            cell.setSizePolicy(
+                QSizePolicy.Policy.Expanding,
+                QSizePolicy.Policy.Expanding if self._expanded else QSizePolicy.Policy.Fixed,
+            )
+            cell.setMinimumSize(QSize(44, 68) if self._expanded else QSize(24, 24))
+            cell.setProperty("expanded", self._expanded)
+            cell.setProperty("empty", False)
             cell.setProperty("today", day == today)
             # A dot rather than a colour, so it still reads in either theme.
             carries_work = day in self._marked
@@ -148,5 +162,24 @@ class CalendarPanel(QWidget):
             cell.clicked.connect(lambda _checked=False, d=day: self.choose(d))
             self._grid.addWidget(cell, row, column)
             self._cells.append(cell)
+            occupied.add((row, column))
             if column == FRIDAY_COLUMN:
                 row += 1
+        if self._expanded:
+            last_row = max((position[0] for position in occupied), default=1)
+            for empty_row in range(1, last_row + 1):
+                for empty_column in range(7):
+                    if (empty_row, empty_column) in occupied:
+                        continue
+                    filler = QToolButton()
+                    filler.setObjectName("calendarDay")
+                    filler.setEnabled(False)
+                    filler.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+                    filler.setProperty("expanded", True)
+                    filler.setProperty("empty", True)
+                    filler.setSizePolicy(
+                        QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+                    )
+                    filler.setMinimumSize(QSize(44, 68))
+                    self._grid.addWidget(filler, empty_row, empty_column)
+                    self._cells.append(filler)
