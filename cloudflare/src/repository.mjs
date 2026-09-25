@@ -46,7 +46,7 @@ export class D1Notes {
     try {
       await this.db.batch([
         this.db.prepare('INSERT INTO notes (id, path, text, version) VALUES (?, ?, ?, 1)')
-          .bind(noteId, `Telegram/${noteId}.md`, text),
+          .bind(noteId, `Inbox/${noteId}.md`, text),
         this.db.prepare(
           'INSERT INTO telegram_messages (chat_id, message_id, note_id, base_version, last_text) VALUES (?, ?, ?, 1, ?)'
         ).bind(chatId, messageId, noteId, text),

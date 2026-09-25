@@ -73,6 +73,7 @@ test('Telegram webhook creates one note, edits it, and ignores retry', async () 
     assert.equal((await worker.fetch(request(update('خرید دارو و نان', true)), env)).status, 200);
     const rows = sqlite.prepare('SELECT text, version FROM notes').all().map(row => ({ ...row }));
     assert.deepEqual(rows, [{ text: 'خرید دارو و نان', version: 2 }]);
+    assert.match(sqlite.prepare('SELECT path FROM notes').get().path, /^Inbox\/[^/]+\.md$/);
     assert.equal(replies.length, 2);
   } finally {
     globalThis.fetch = originalFetch;
