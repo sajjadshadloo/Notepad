@@ -7,32 +7,138 @@ panel with it. A frameless window pinned to the *bottom* of the z-order gets
 the same effect and survives: visible whenever the desktop is, never over
 the window you are working in.
 
-It is deliberately small and does one job: show the day, and let a task be
-ticked without opening the app.
+The v4 design draws it as a 272x348 card, radius 16: the day, «۱ از ۴ انجام
+شده», a 4px progress bar, today's tasks, and a footnote saying how to move it.
 """
 from datetime import date
 
-from PyQt6.QtCore import QEvent, QPoint, QRect, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QPainter, QPen
-from PyQt6.QtWidgets import (
-    QHBoxLayout,
-    QLabel,
-    QToolButton,
-    QVBoxLayout,
-    QWidget,
-)
+from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QFontMetricsF, QPainter
+from PyQt6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
-from core.jalali import format_long, to_persian_digits
+from core.jalali import MONTHS, from_gregorian, to_persian_digits
 from core.tasks import Task
-from ui.styles import current_palette
-from ui.task_rows import TaskList
+from core.when import weekday_name
+from ui.kit import Button, col, draw_checkbox, draw_text, font, rounded
 
-WIDTH = 268
-HEIGHT = 340
+CARD_W, CARD_H = 272, 348
+# Room around the card for its shadow (0 18px 44px in the design).
+SHADOW = 18
+WIDTH, HEIGHT = CARD_W + 2 * SHADOW, CARD_H + 2 * SHADOW
 MARGIN = 24
-RADIUS = 14
-# Enough to read through, not so many that the panel becomes a second app.
+RADIUS = 16
 TASK_LIMIT = 12
+
+
+class _WidgetList(QWidget):
+    """Today's rows: a 15px box, 13px text; a click on the box ticks it."""
+
+    task_toggled = pyqtSignal(str, int, bool)
+    task_opened = pyqtSignal(str, int)
+
+    ROW = 7 + 13 * 1.7 + 7
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMouseTracking(True)
+        self._tasks: list[Task] = []
+        self._hover = -1
+
+    def set_tasks(self, tasks):
+        self._tasks = list(tasks)
+        self.setMinimumHeight(round(self.ROW * len(self._tasks)) if self._tasks else 80)
+        self.update()
+
+    # The surface the older list offered, kept for callers and tests.
+    def texts(self) -> list[str]:
+        return [t.text for t in self._tasks] or ["امروز کاری ثبت نشده"]
+
+    def item(self, index: int) -> int:
+        return index
+
+    def payload_of(self, index: int):
+        task = self._tasks[index]
+        return task.path, task.line_number
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        if not self._tasks:
+            draw_text(p, QRectF(8, 30, self.width() - 16, 20), "امروز کاری ثبت نشده", font(12.5),
+                      col("muted"), Qt.AlignmentFlag.AlignCenter)
+            p.end()
+            return
+        for index, task in enumerate(self._tasks):
+            rect = QRectF(0, index * self.ROW, self.width(), self.ROW)
+            if index == self._hover:
+                rounded(p, rect, 8, fill=col("surface_alt"))
+            right = rect.right() - 6
+            draw_checkbox(p, QPointF(right - 10, rect.top() + 7 + 2 + 10), 15, 5, task.done)
+            draw_text(p, QRectF(rect.left() + 6, rect.top() + 7, right - 20 - 9 - rect.left() - 6,
+                                13 * 1.7), task.text, font(13),
+                      col("muted" if task.done else "text"), strike=task.done)
+        p.end()
+
+    def _at(self, y: float) -> int:
+        index = int(y // self.ROW)
+        return index if 0 <= index < len(self._tasks) else -1
+
+    def mouseMoveEvent(self, event):
+        hover = self._at(event.position().y())
+        if hover != self._hover:
+            self._hover = hover
+            self.update()
+
+    def leaveEvent(self, event):
+        self._hover = -1
+        self.update()
+        super().leaveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        index = self._at(event.position().y())
+        if index < 0:
+            return
+        task = self._tasks[index]
+        if event.position().x() >= self.width() - 6 - 20:
+            self.task_toggled.emit(task.path, task.line_number, not task.done)
+        else:
+            self.task_opened.emit(task.path, task.line_number)
+
+
+class _Bar(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.fraction = 0.0
+        self.setFixedHeight(4)
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        r = QRectF(self.rect())
+        rounded(p, r, 2, fill=col("surface_alt"))
+        if self.fraction:
+            w = r.width() * self.fraction
+            p.fillRect(QRectF(r.right() - w, 0, w, r.height()), col("accent"))
+        p.end()
+
+
+class _Heading(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.title, self.sub = "", ""
+        self.setFixedHeight(round(QFontMetricsF(font(14.5, 700)).height() + 1
+                                  + QFontMetricsF(font(11.5)).height()))
+
+    def text(self) -> str:
+        return self.sub
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        th = QFontMetricsF(font(14.5, 700)).height()
+        draw_text(p, QRectF(0, 0, self.width(), th), self.title, font(14.5, 700), col("text"))
+        draw_text(p, QRectF(0, th + 1, self.width(), self.height() - th - 1), self.sub,
+                  font(11.5), col("muted"))
+        p.end()
 
 
 class DayWidget(QWidget):
@@ -50,11 +156,6 @@ class DayWidget(QWidget):
         super().__init__(parent)
         self.setObjectName("dayWidget")
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        # On the desktop, not over the work. Staying on *top* meant it sat
-        # above whatever you were doing all day, which is its own kind of
-        # interruption — the thing 4.0 removed reminders for. On the bottom
-        # of the z-order it is there whenever the desktop is, and never in
-        # front of anything else.
         self.setWindowFlags(
             Qt.WindowType.Tool
             | Qt.WindowType.FramelessWindowHint
@@ -66,81 +167,65 @@ class DayWidget(QWidget):
         self._tasks: list[Task] = []
 
         column = QVBoxLayout(self)
-        column.setContentsMargins(16, 14, 16, 14)
-        column.setSpacing(10)
-        column.addLayout(self._build_header())
+        column.setContentsMargins(SHADOW, SHADOW, SHADOW, SHADOW)
+        column.setSpacing(0)
 
-        self.list = TaskList()
+        head = QHBoxLayout()
+        head.setContentsMargins(10, 14, 14, 10)
+        head.setSpacing(6)
+        self.heading = _Heading()
+        head.addWidget(self.heading, 1)
+        small = dict(height=26, width=26, radius=7, padding=(0, 0), normal={"fg": "muted"},
+                     hover={"bg": "hover", "fg": "text"})
+        opener = Button("", "open_out", icon_size=13, stroke=1.6, **small)
+        opener.setToolTip("باز کردن برنامه")
+        opener.clicked.connect(self.open_requested)
+        closer = Button("", "close", icon_size=10, stroke=1.8, **small)
+        closer.setToolTip("بستن ویجت")
+        closer.clicked.connect(self._close_clicked)
+        head.addWidget(opener, 0, Qt.AlignmentFlag.AlignTop)
+        head.addWidget(closer, 0, Qt.AlignmentFlag.AlignTop)
+        column.addLayout(head)
+
+        bar_row = QHBoxLayout()
+        bar_row.setContentsMargins(14, 0, 14, 6)
+        self.bar = _Bar()
+        bar_row.addWidget(self.bar)
+        column.addLayout(bar_row)
+
+        list_row = QVBoxLayout()
+        list_row.setContentsMargins(8, 4, 8, 10)
+        self.list = _WidgetList()
         self.list.task_toggled.connect(self.task_toggled)
-        self.list.task_delete_requested.connect(self.task_delete_requested)
-        self.list.itemActivated.connect(self._open)
-        column.addWidget(self.list, 1)
-
-        self.progress = QLabel()
-        self.progress.setObjectName("dayWidgetProgress")
-        column.addWidget(self.progress)
-
-    def _build_header(self) -> QHBoxLayout:
-        row = QHBoxLayout()
-        row.setSpacing(6)
-        self.heading = QLabel()
-        self.heading.setObjectName("dayWidgetHeading")
-        self.heading.setWordWrap(True)
-
-        open_button = QToolButton()
-        open_button.setText("↗")
-        open_button.setToolTip("باز کردن برنامه")
-        open_button.setAutoRaise(True)
-        open_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        open_button.clicked.connect(self.open_requested)
-
-        close_button = QToolButton()
-        close_button.setText("×")
-        close_button.setToolTip("بستن ویجت")
-        close_button.setAutoRaise(True)
-        close_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        close_button.clicked.connect(self._close_clicked)
-
-        row.addWidget(self.heading, 1)
-        row.addWidget(open_button)
-        row.addWidget(close_button)
-        self.heading.installEventFilter(self)
-        return row
+        self.list.task_opened.connect(self.task_opened)
+        list_row.addWidget(self.list)
+        list_row.addStretch(1)
+        column.addLayout(list_row, 1)
+        self.footer_height = round(8 + QFontMetricsF(font(11)).height() + 8)
+        column.addSpacing(self.footer_height)
+        # The design's name for the counter — kept so callers can read it.
+        self.progress = self.heading
 
     # Content
 
     def set_tasks(self, tasks: list[Task]):
         """Given every task, keep today's — dated, and due today."""
         today = date.today()
-        mine = [
-            task
-            for task in tasks
-            if task.due is not None and task.due.date() == today
-        ]
-        mine.sort(key=lambda task: (task.done, task.text))
+        mine = [t for t in tasks if t.due is not None and t.due.date() == today]
+        # Open first, then in the order they are written in their file.
+        mine.sort(key=lambda task: (task.done, task.path, task.line_number))
         self._tasks = mine
-
-        self.heading.setText(format_long(today))
-        self.list.clear()
-        for task in mine[:TASK_LIMIT]:
-            self.list.add_task(task, when="")
-        if not mine:
-            self.list.add_empty("امروز کاری ثبت نشده")
-
+        _, month, day = from_gregorian(today)
+        self.heading.title = weekday_name(today) + "، " + to_persian_digits(str(day)) + " " + MONTHS[month - 1]
         done = sum(1 for task in mine if task.done)
-        self.progress.setText(
-            to_persian_digits(str(done) + " از " + str(len(mine)) + " انجام شده")
-            if mine
-            else ""
-        )
+        self.heading.sub = to_persian_digits(f"{done} از {len(mine)} انجام شده")
+        self.heading.update()
+        self.bar.fraction = done / len(mine) if mine else 0.0
+        self.bar.update()
+        self.list.set_tasks(mine[:TASK_LIMIT])
 
     def task_texts(self) -> list[str]:
         return [task.text for task in self._tasks]
-
-    def _open(self, item):
-        payload = self.list.payload_of(item)
-        if payload:
-            self.task_opened.emit(payload[0], payload[1])
 
     def _close_clicked(self):
         self.hide()
@@ -149,50 +234,21 @@ class DayWidget(QWidget):
     # Placement
 
     def place(self, screen, remembered=None):
-        """Put the panel where it was left, or in a free corner.
-
-        The default is the bottom *right*. 4.2.0 parked it bottom-left,
-        which on a Windows desktop is exactly where the icons are.
-        """
+        """Put the panel where it was left, or in the bottom-right corner —
+        the left of a Windows desktop is where the icons are."""
         area = screen.availableGeometry()
         if remembered:
             point = QPoint(int(remembered[0]), int(remembered[1]))
-            # Only if it still lands on a screen — monitors get unplugged.
             if area.contains(QRect(point, self.size()).center()):
                 self.move(point)
                 return
-        self.move(
-            area.right() - self.width() - MARGIN,
-            area.bottom() - self.height() - MARGIN,
-        )
+        self.move(area.right() - self.width() - MARGIN, area.bottom() - self.height() - MARGIN)
 
-    # A frameless window has no title bar, so the header is the handle. The
-    # panel's own mouse events only fire on bare background — the list and
-    # the labels swallow theirs — which left almost nothing to grab, so the
-    # heading watches for the drag on the panel's behalf.
-
-    def eventFilter(self, watched, event):
-        if event.type() == QEvent.Type.MouseButtonPress:
-            if event.button() == Qt.MouseButton.LeftButton:
-                self._drag_from = (
-                    event.globalPosition().toPoint()
-                    - self.frameGeometry().topLeft()
-                )
-        elif event.type() == QEvent.Type.MouseMove and self._drag_from is not None:
-            if event.buttons() & Qt.MouseButton.LeftButton:
-                self.move(event.globalPosition().toPoint() - self._drag_from)
-                return True
-        elif event.type() == QEvent.Type.MouseButtonRelease:
-            if self._drag_from is not None:
-                self._drag_from = None
-                self.moved.emit(self.pos())
-        return super().eventFilter(watched, event)
+    # A frameless window has no title bar: the card itself is the handle.
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_from = (
-                event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-            )
+            self._drag_from = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
 
     def mouseMoveEvent(self, event):
         if self._drag_from is not None and event.buttons() & Qt.MouseButton.LeftButton:
@@ -203,17 +259,21 @@ class DayWidget(QWidget):
             self._drag_from = None
             self.moved.emit(self.pos())
 
-    def paintEvent(self, event):
-        """Drawn rather than styled: a translucent window gets no stylesheet
-        background, and the rounded corners have to be painted to be real."""
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        palette = current_palette()
-        fill = QColor(palette["surface"])
-        fill.setAlpha(244)
-        painter.setBrush(fill)
-        painter.setPen(QPen(QColor(palette["border"]), 1.0))
-        painter.drawRoundedRect(
-            self.rect().adjusted(0, 0, -1, -1), RADIUS, RADIUS
-        )
-        painter.end()
+    def paintEvent(self, _event):
+        """Drawn, not styled: a translucent window gets no stylesheet
+        background, and the corners and shadow have to be painted."""
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        card = QRectF(SHADOW, SHADOW, CARD_W, CARD_H)
+        # A soft shadow below the card: stacked translucent layers.
+        for step in range(SHADOW, 0, -3):
+            shade = QColor(0, 0, 0, round(46 * (1 - step / SHADOW) ** 2))
+            rounded(p, card.adjusted(-step / 2, -step / 3, step / 2, step), RADIUS + step / 2, fill=shade)
+        fill = col("surface")
+        fill.setAlphaF(0.96)
+        rounded(p, card, RADIUS, fill=fill, border=col("border"))
+        foot_top = card.bottom() - self.footer_height
+        p.fillRect(QRectF(card.left() + 1, foot_top, CARD_W - 2, 1), col("line"))
+        draw_text(p, QRectF(card.left() + 14, foot_top, CARD_W - 28, self.footer_height),
+                  "از عنوان بگیر و جابه‌جا کن · پشت پنجره‌ها می‌ماند", font(11), col("faint"))
+        p.end()
