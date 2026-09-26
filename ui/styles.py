@@ -368,28 +368,6 @@ QToolBar::separator {{
     margin: 5px 7px;
 }}
 
-/* Today's progress, shown at the right end of the tab strip. */
-#todayMeter {{
-    background: {t['surface_alt']};
-    border: none;
-    border-radius: 3px;
-    max-height: 5px;
-    min-height: 5px;
-    text-align: center;
-}}
-#todayMeter::chunk {{
-    background: {t['accent']};
-    border-radius: 3px;
-}}
-#todayMeterLabel {{
-    color: {t['text']};
-    font-size: 11px;
-}}
-#todayMeterCaption {{
-    color: {t['muted']};
-    font-size: 11px;
-}}
-
 #documentTabs {{
     background: {t['surface']};
     border-bottom: 1px solid {t['border']};

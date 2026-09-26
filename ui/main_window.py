@@ -39,7 +39,6 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QMenu,
     QMessageBox,
-    QProgressBar,
     QPushButton,
     QSizePolicy,
     QStackedWidget,
@@ -847,10 +846,6 @@ class MainWindow(QMainWindow):
         tab_bar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         tab_bar.customContextMenuRequested.connect(self._show_tab_menu)
 
-        # Today's progress lives in the «امروز» column in v4; the meter is
-        # built so the task watcher has somewhere to report, but not shown.
-        self._build_today_meter()
-
         self.notes_board = NotesBoard(self._cfg["notes_root"])
         self.notes_board.set_pinned(self._cfg.get("pinned_notes", []))
         self.notes_board.set_view(self._cfg.get("home_view", "grid"))
@@ -979,34 +974,6 @@ class MainWindow(QMainWindow):
         self.statusBar().messageChanged.connect(
             lambda text: text and not text[:1].isascii() and self.flash(text))
 
-    def _build_today_meter(self) -> QWidget:
-        """How much of today is done, at the end of the tab strip.
-
-        Fed by the task watcher’s existing scan, so it costs nothing
-        extra — and it stays hidden on a day with nothing scheduled rather
-        than sitting there empty.
-        """
-        holder = QWidget()
-        row = QHBoxLayout(holder)
-        row.setContentsMargins(10, 0, 10, 0)
-        row.setSpacing(8)
-
-        caption = QLabel("امروز")
-        caption.setObjectName("todayMeterCaption")
-        self.today_meter = QProgressBar()
-        self.today_meter.setObjectName("todayMeter")
-        self.today_meter.setTextVisible(False)
-        self.today_meter.setFixedWidth(96)
-        self.today_meter_label = QLabel()
-        self.today_meter_label.setObjectName("todayMeterLabel")
-
-        row.addWidget(caption)
-        row.addWidget(self.today_meter)
-        row.addWidget(self.today_meter_label)
-        holder.setVisible(False)
-        self._today_meter_holder = holder
-        return holder
-
     def update_open_task_count(self, count: int):
         label = to_persian_digits(str(count)) if count else ""
         self.top_bar.set_open_task_count(label)
@@ -1083,17 +1050,6 @@ class MainWindow(QMainWindow):
         else:
             crumb = "کارهای من"
         self.top_bar.set_crumb(crumb)
-
-    def update_today_meter(self, done: int, total: int):
-        self._today_meter_holder.setVisible(total > 0)
-        if total <= 0:
-            return
-        self.today_meter.setMaximum(total)
-        self.today_meter.setValue(done)
-        self.today_meter_label.setText(to_persian_digits(f"{done}/{total}"))
-        self._today_meter_holder.setToolTip(
-            to_persian_digits(f"{done} از {total} کار امروز انجام شده")
-        )
 
     def cycle_theme(self):
         """The top bar's sun button: straight between dark and light.
@@ -2905,7 +2861,6 @@ class MainWindow(QMainWindow):
         if self._tasks_watcher is not None:
             return
         self._tasks_watcher = TaskWatcher(self._cfg["notes_root"], self)
-        self._tasks_watcher.progress_changed.connect(self.update_today_meter)
         self._tasks_watcher.open_count_changed.connect(self.update_open_task_count)
         # The calendar redraws from every completed scan, so a change made in
         # the editor shows up there without anyone asking.

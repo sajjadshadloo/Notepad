@@ -61,3 +61,28 @@ def test_quitting_waits_for_the_task_scan(window):
     watcher._worker = None
     watcher.check_now()
     assert watcher._worker is None
+
+
+def test_no_widget_of_the_window_floats_on_its_own(window, qapp):
+    """A widget built without a parent and later shown becomes its own
+    window: the old «امروز ۱/۱» meter popped up that way after each scan."""
+    from datetime import datetime
+
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtWidgets import QApplication
+
+    from core.tasks import Task
+
+    passing = (Qt.WindowType.ToolTip, Qt.WindowType.Popup)
+
+    def shown():
+        return {id(w) for w in QApplication.topLevelWidgets()
+                if w.isVisible() and w.windowType() not in passing}
+
+    window.show()
+    qapp.processEvents()
+    before = shown()
+    # One task, done today: the report that used to show the meter.
+    window._tasks_watcher._handle_tasks([Task("x", True, datetime.now(), False, "a.md", 1)])
+    qapp.processEvents()
+    assert shown() - before == set()
