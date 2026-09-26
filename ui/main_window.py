@@ -5,7 +5,15 @@ import sys
 from datetime import date, datetime
 from pathlib import Path
 
-from PyQt6.QtCore import QByteArray, QPoint, QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import (
+    QAbstractNativeEventFilter,
+    QByteArray,
+    QPoint,
+    QSize,
+    Qt,
+    QTimer,
+    pyqtSignal,
+)
 from PyQt6.QtGui import (
     QAction,
     QActionGroup,
@@ -386,6 +394,30 @@ class FindReplaceDialog(QDialog):
         self._window.statusBar().showMessage(
             f"Replaced {count} occurrence{'s' if count != 1 else ''}.", 3000
         )
+
+
+class HotkeyFilter(QAbstractNativeEventFilter):
+    """Turns this app's WM_HOTKEY into a call; lets every other message by."""
+
+    WM_HOTKEY = 0x0312
+
+    def __init__(self, hotkey_id: int, callback):
+        super().__init__()
+        self._id = hotkey_id
+        self._callback = callback
+
+    def nativeEventFilter(self, event_type, message):
+        try:
+            if bytes(event_type) == b"windows_generic_MSG":
+                import ctypes.wintypes
+
+                msg = ctypes.wintypes.MSG.from_address(int(message))
+                if msg.message == self.WM_HOTKEY and msg.wParam == self._id:
+                    QTimer.singleShot(0, self._callback)
+                    return True, 0
+        except Exception:
+            pass
+        return False, 0
 
 
 class MainWindow(QMainWindow):
@@ -2655,6 +2687,12 @@ class MainWindow(QMainWindow):
             self._show_day_widget()
 
     # Win+Alt+N from anywhere in Windows
+    #
+    # Caught by an application-wide native event filter, never by overriding
+    # nativeEvent on the window: PyQt calls an override for the messages sent
+    # while the native window is being created — which restoring a maximized
+    # geometry does inside __init__ — and that crashed the process on start.
+    # The filter only sees messages taken from the queue, where WM_HOTKEY is.
 
     _HOTKEY_ID = 0x4E50  # "NP"
 
@@ -2669,6 +2707,9 @@ class MainWindow(QMainWindow):
             MOD_ALT, MOD_WIN, MOD_NOREPEAT, VK_N = 0x0001, 0x0008, 0x4000, 0x4E
             self._hotkey_ok = bool(ctypes.windll.user32.RegisterHotKey(
                 int(self.winId()), self._HOTKEY_ID, MOD_ALT | MOD_WIN | MOD_NOREPEAT, VK_N))
+            if self._hotkey_ok:
+                self._hotkey_filter = HotkeyFilter(self._HOTKEY_ID, self.show_quick_capture)
+                QApplication.instance().installNativeEventFilter(self._hotkey_filter)
         except Exception:
             self._hotkey_ok = False
             log.warning("Could not register Win+Alt+N", exc_info=True)
@@ -2681,19 +2722,10 @@ class MainWindow(QMainWindow):
                 ctypes.windll.user32.UnregisterHotKey(int(self.winId()), self._HOTKEY_ID)
             except Exception:
                 pass
-
-    def nativeEvent(self, event_type, message):
-        if sys.platform == "win32" and getattr(self, "_hotkey_ok", False):
-            try:
-                import ctypes.wintypes
-
-                msg = ctypes.wintypes.MSG.from_address(int(message))
-                if msg.message == 0x0312 and msg.wParam == self._HOTKEY_ID:  # WM_HOTKEY
-                    QTimer.singleShot(0, self.show_quick_capture)
-                    return True, 0
-            except Exception:
-                pass
-        return super().nativeEvent(event_type, message)
+        hotkey_filter = getattr(self, "_hotkey_filter", None)
+        if hotkey_filter is not None:
+            QApplication.instance().removeNativeEventFilter(hotkey_filter)
+            self._hotkey_filter = None
 
     def _install_tray(self):
         """Put the app in the notification area, if there is one.
