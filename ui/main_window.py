@@ -2363,7 +2363,7 @@ class MainWindow(QMainWindow):
                          if (tab := self.tabs.widget(index)).path and tab.modified}
             self._sync_worker = CloudSyncWorker(
                 self._cfg["notes_root"], settings_manager.app_data_dir() / "cloud_sync_state.json",
-                config["url"], config["key"], protected, self)
+                config["url"], config["key"], protected, self, config.get("proxy", ""))
             worker = self._sync_worker
             worker.completed.connect(self._sync_finished)
             worker.finished.connect(worker.deleteLater)

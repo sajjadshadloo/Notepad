@@ -117,6 +117,7 @@ class SmartEditor(QTextEdit):
         self._line_area = LineNumberArea(self)
         self._margin_area = MarginArea(self)
         self._focus_layout = False
+        self._laying_out = False
         self._near_pad = NUMBER_EDGE
         self._far_pad = LEFT_ROOM
         self._row_metrics: dict = {}
@@ -181,10 +182,10 @@ class SmartEditor(QTextEdit):
             top, bottom = DOC_TOP, DOC_BOTTOM
             far = max(LEFT_ROOM, width - self.line_number_area_width() - TEXT_MAX)
         near = self.line_number_area_width()
-        if self._is_rtl_document():
-            self.setViewportMargins(round(far), 0, near, 0)
-        else:
-            self.setViewportMargins(near, 0, round(far), 0)
+        margins = (round(far), 0, near, 0) if self._is_rtl_document() else (near, 0, round(far), 0)
+        current = self.viewportMargins()
+        if (current.left(), current.top(), current.right(), current.bottom()) != margins:
+            self.setViewportMargins(*margins)
         frame = self.document().rootFrame()
         fmt = frame.frameFormat()
         if (fmt.topMargin(), fmt.bottomMargin(), fmt.leftMargin(), fmt.rightMargin()) != (top, bottom, 0, 0):
@@ -244,8 +245,18 @@ class SmartEditor(QTextEdit):
         self._update_line_area_width()
 
     def resizeEvent(self, event):
-        # Margins first, so the text wraps to the viewport it will really have.
-        self._update_line_area_width(event.size().width() - 2 * self.frameWidth(), relayout=False)
+        # QTextEdit also routes its *viewport's* resize here, with the
+        # viewport's narrower size. Margins computed from that width resized
+        # the viewport again, to a different width, and on a wide window the
+        # two widths answered each other until the stack ran out. So: the
+        # editor's own width, always, and never from inside a margin change.
+        if not self._laying_out:
+            self._laying_out = True
+            try:
+                # Margins first, so the text wraps to the viewport it will really have.
+                self._update_line_area_width(self.width() - 2 * self.frameWidth(), relayout=False)
+            finally:
+                self._laying_out = False
         super().resizeEvent(event)
         self._invalidate_marker_cache()
         self._place_side_areas()

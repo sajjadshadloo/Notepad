@@ -133,3 +133,41 @@ def test_sync_status_keeps_last_completion_after_error(tmp_path: Path):
     assert second["state"] == "error"
     assert second["completed_at"] == first["completed_at"]
     assert api.calls[-1][0:2] == ("/sync-status", "POST")
+
+
+def test_an_unreachable_cloud_says_why(monkeypatch):
+    """"Cloud is unavailable" alone could not tell a timeout from a proxy."""
+    from urllib.error import URLError
+
+    import core.cloud_sync as cloud_sync
+
+    def refuse(*_args, **_kwargs):
+        raise URLError(ConnectionRefusedError(10061, "refused"))
+
+    monkeypatch.setattr(cloud_sync, "urlopen", refuse)
+    api = cloud_sync.CloudApi("https://example.invalid", "key")
+    with pytest.raises(cloud_sync.SyncError, match=r"Cloud is unavailable \(ConnectionRefusedError"):
+        api.call("/notes")
+
+
+def test_a_named_proxy_is_used_even_with_the_system_proxy_off(monkeypatch):
+    """The VPN's own port, so sync does not hang on its "system proxy" switch."""
+    import core.cloud_sync as cloud_sync
+
+    seen = {}
+
+    class Opener:
+        def open(self, request, timeout):
+            seen["url"] = request.full_url
+            raise OSError("stop")
+
+    def build(handler):
+        seen["proxies"] = handler.proxies
+        return Opener()
+
+    monkeypatch.setattr(cloud_sync, "build_opener", build)
+    api = cloud_sync.CloudApi("https://example.invalid", "key", "http://127.0.0.1:10808")
+    with pytest.raises(cloud_sync.SyncError):
+        api.call("/notes")
+    assert seen["proxies"] == {"http": "http://127.0.0.1:10808", "https": "http://127.0.0.1:10808"}
+    assert seen["url"] == "https://example.invalid/api/notes"

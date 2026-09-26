@@ -11,7 +11,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.error import HTTPError
-from urllib.request import Request, urlopen
+from urllib.request import ProxyHandler, Request, build_opener, urlopen
 
 from PyQt6.QtCore import QLockFile
 
@@ -49,11 +49,16 @@ def _safe_path(root: Path, rel: str) -> Path:
 
 
 class CloudApi:
-    def __init__(self, url: str, key: str):
+    def __init__(self, url: str, key: str, proxy: str = ""):
         if not url.startswith("https://") or not key:
             raise SyncError("Cloud sync is not configured")
         self.url = url.rstrip("/")
         self.key = key
+        # Where the Worker is filtered, it is reached through the VPN's local
+        # port. Named here, sync keeps working when the VPN's "system proxy"
+        # switch is off; left empty, the system's own proxy settings apply.
+        self._open = (build_opener(ProxyHandler({"http": proxy, "https": proxy})).open
+                      if proxy else urlopen)
 
     def call(self, path: str, method: str = "GET", body: dict | None = None) -> dict:
         payload = json.dumps(body, ensure_ascii=False).encode("utf-8") if body is not None else None
@@ -62,14 +67,17 @@ class CloudApi:
                                    "Content-Type": "application/json",
                                    "User-Agent": "Mozilla/5.0 NotepadPlusSync/1"})
         try:
-            with urlopen(request, timeout=15) as response:
+            with self._open(request, timeout=15) as response:
                 return json.load(response)
         except HTTPError as exc:
             if exc.code == 409:
                 raise SyncError("Cloud version conflict") from exc
             raise SyncError(f"Cloud request failed ({exc.code})") from exc
         except (OSError, ValueError) as exc:
-            raise SyncError("Cloud is unavailable") from exc
+            # Say which way it failed: a timeout, a refused proxy and a page
+            # that is not JSON all need different fixes.
+            reason = getattr(exc, "reason", None) or exc
+            raise SyncError(f"Cloud is unavailable ({type(reason).__name__}: {reason})"[:150]) from exc
 
 
 def _journal(path: Path) -> dict:

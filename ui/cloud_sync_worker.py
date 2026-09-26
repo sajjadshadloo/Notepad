@@ -12,8 +12,9 @@ class CloudSyncWorker(QThread):
     completed = pyqtSignal(object, str)
 
     def __init__(self, root: str, state_file: Path, url: str, key: str,
-                 protected: set[str], parent=None):
+                 protected: set[str], parent=None, proxy: str = ""):
         super().__init__(parent)
+        self.proxy = proxy
         self.root = Path(root)
         self.state_file = state_file
         self.url = url
@@ -21,7 +22,7 @@ class CloudSyncWorker(QThread):
         self.protected = protected
 
     def run(self):
-        api = CloudApi(self.url, self.key)
+        api = CloudApi(self.url, self.key, self.proxy)
         try:
             result = sync_once(self.root, self.state_file, api, self.protected)
             record_sync_status(self.state_file.with_name("cloud_sync_status.json"), api, result)

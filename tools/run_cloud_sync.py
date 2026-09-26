@@ -32,7 +32,7 @@ def main():
                                           backupCount=1, encoding="utf-8"))
     settings = load()
     root = Path(settings.get("notes_root") or resolve_save_dir(settings))
-    api = CloudApi(config["url"], config["key"])
+    api = CloudApi(config["url"], config["key"], config.get("proxy", ""))
     try:
         result = sync_once(root, data / "cloud_sync_state.json", api)
         record_sync_status(data / "cloud_sync_status.json", api, result)

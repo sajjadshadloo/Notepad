@@ -81,10 +81,10 @@ UNUSED_BINARIES = (
     # the print machinery has an importer left.
     'qt6pdf.dll',
     'qt6printsupport.dll',
-    # OpenSSL, pulled in with QtNetwork. The only networking here is a local
-    # named pipe for the single-instance guard, which never negotiates TLS.
-    'libssl-3.dll',
-    'libcrypto-3.dll',
+    # Not OpenSSL (libssl-3.dll, libcrypto-3.dll): 4.0 dropped it as unused,
+    # but cloud sync talks HTTPS through Python's ssl module, which loads
+    # those same DLLs. Without them urllib has no https handler at all and
+    # every sync failed with "unknown url type: https".
 )
 
 a.binaries = TOC(
