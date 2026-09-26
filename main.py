@@ -8,7 +8,7 @@ from pathlib import Path
 
 from core.startup_trace import ENABLED as _TRACE, elapsed_ms, mark as _mark, marks
 
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import QtMsgType, QTimer, qInstallMessageHandler
 from PyQt6.QtGui import QFont, QIcon
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
@@ -25,6 +25,7 @@ _mark("import core")
 # inside main() once we know this process is the one that will show a window.
 
 log = logging.getLogger("notepad")
+_fault_file = None
 
 
 def app_icon() -> QIcon:
@@ -60,7 +61,42 @@ def _setup_logging() -> Path:
     root = logging.getLogger()
     root.addHandler(handler)
     root.setLevel(logging.INFO)
+    # A native crash leaves no Python traceback; faulthandler writes the
+    # Python stack of every thread here as the process dies.
+    global _fault_file
+    try:
+        import faulthandler
+
+        _fault_file = open(log_dir / "crash.log", "a", encoding="utf-8")
+        faulthandler.enable(_fault_file, all_threads=True)
+    except OSError:
+        pass
     return log_file
+
+
+def _install_qt_message_log():
+    """Qt's own warnings and fatal errors, into the log.
+
+    A qFatal ends the process with no Python traceback at all; the message
+    Qt printed just before is the only account of why, and a windowed app
+    has no console to print it to.
+    """
+    levels = {
+        QtMsgType.QtDebugMsg: logging.DEBUG,
+        QtMsgType.QtInfoMsg: logging.INFO,
+        QtMsgType.QtWarningMsg: logging.WARNING,
+        QtMsgType.QtCriticalMsg: logging.ERROR,
+        QtMsgType.QtFatalMsg: logging.CRITICAL,
+    }
+    qt_log = logging.getLogger("qt")
+
+    def handler(kind, context, message):
+        qt_log.log(levels.get(kind, logging.WARNING), "%s", message)
+        if kind == QtMsgType.QtFatalMsg:
+            for h in logging.getLogger().handlers:
+                h.flush()
+
+    qInstallMessageHandler(handler)
 
 
 def _install_excepthook(log_file: Path):
@@ -104,6 +140,7 @@ def main() -> int:
     _mark("QApplication")
     log_file = _setup_logging()
     _install_excepthook(log_file)
+    _install_qt_message_log()
     _mark("logging")
 
     # Resolve now: a second instance forwards these paths to the first one,

@@ -489,6 +489,7 @@ class MainWindow(QMainWindow):
         self._read_sync_status()
         self._sync_timer = QTimer(self, interval=60_000)
         self._sync_timer.timeout.connect(self._sync_tick)
+        QApplication.instance().aboutToQuit.connect(self._finish_background_work)
         self._sync_timer.start()
         QTimer.singleShot(1500, self._sync_tick)
         self._restore_geometry()
@@ -2388,6 +2389,24 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(
                 f"{result.skipped} فایل باز یا تغییرکرده در انتظار است.", 8000)
 
+    SYNC_EXIT_WAIT_MS = 15_000
+
+    def _finish_background_work(self):
+        """Let a sync in flight land before the process goes.
+
+        Qt aborts the whole process when a QThread is destroyed while still
+        running. Quitting mid-sync did that; so did quitting during the task
+        scan, which on a cold first launch was still walking the folder.
+        """
+        self._closing_application = True
+        self._sync_timer.stop()
+        if self._tasks_watcher is not None:
+            self._tasks_watcher.stop()
+        worker = self._sync_worker
+        if worker is not None and worker.isRunning():
+            if not worker.wait(self.SYNC_EXIT_WAIT_MS):
+                log.warning("Cloud sync still running at exit")
+
     def _clear_sync_worker(self, worker):
         if self._sync_worker is worker:
             self._sync_worker = None
@@ -2709,7 +2728,12 @@ class MainWindow(QMainWindow):
                 int(self.winId()), self._HOTKEY_ID, MOD_ALT | MOD_WIN | MOD_NOREPEAT, VK_N))
             if self._hotkey_ok:
                 self._hotkey_filter = HotkeyFilter(self._HOTKEY_ID, self.show_quick_capture)
-                QApplication.instance().installNativeEventFilter(self._hotkey_filter)
+                app = QApplication.instance()
+                app.installNativeEventFilter(self._hotkey_filter)
+                # A quit need not pass through closeEvent; a Python filter
+                # still installed while Qt tears the application down kills
+                # the process on the way out.
+                app.aboutToQuit.connect(self._unregister_global_hotkey)
         except Exception:
             self._hotkey_ok = False
             log.warning("Could not register Win+Alt+N", exc_info=True)

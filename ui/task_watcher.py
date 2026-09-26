@@ -55,6 +55,7 @@ class TaskWatcher(QObject):
         self._root = root
         self._tasks: list[Task] = []
         self._worker: _ScanWorker | None = None
+        self._stopped = False
         self._timer = QTimer(self, interval=RESCAN_INTERVAL_MS)
         self._timer.timeout.connect(self.check_now)
 
@@ -82,6 +83,8 @@ class TaskWatcher(QObject):
         return list(self._tasks)
 
     def check_now(self):
+        if self._stopped:
+            return
         if self._worker is not None and self._worker.isRunning():
             return
         self._worker = _ScanWorker(self._root, self)
@@ -100,8 +103,13 @@ class TaskWatcher(QObject):
         )
         self.scanned.emit()
 
+    # A cold first walk of a big notes folder can take seconds; a thread
+    # destroyed while still walking aborts the whole process.
+    STOP_WAIT_MS = 15_000
+
     def stop(self):
+        self._stopped = True
         self._timer.stop()
         if self._worker is not None and self._worker.isRunning():
-            self._worker.quit()
-            self._worker.wait(2000)
+            if not self._worker.wait(self.STOP_WAIT_MS):
+                log.warning("Task scan still running at exit")
