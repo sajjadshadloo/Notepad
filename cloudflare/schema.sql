@@ -3,7 +3,8 @@ CREATE TABLE IF NOT EXISTS notes (
     path TEXT NOT NULL UNIQUE,
     text TEXT NOT NULL,
     version INTEGER NOT NULL CHECK (version >= 1),
-    deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1))
+    deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1)),
+    updated_at INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS telegram_messages (
@@ -25,6 +26,7 @@ CREATE TABLE IF NOT EXISTS conflicts (
     current_text TEXT NOT NULL,
     proposed_text TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'open',
+    created_at INTEGER,
     UNIQUE (chat_id, message_id, expected_version, proposed_text)
 );
 

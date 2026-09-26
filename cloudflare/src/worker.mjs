@@ -22,9 +22,6 @@ export default {
       headers: { 'Content-Type': 'text/html; charset=utf-8',
         'Content-Security-Policy': "default-src 'none'; script-src 'self' https://telegram.org; style-src 'self'; font-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors https://web.telegram.org https://*.telegram.org" },
     });
-    if (url.pathname === '/app.js' && request.method === 'GET') return new Response((await import('./miniapp-client.mjs')).miniAppScript, {
-      headers: { 'Content-Type': 'application/javascript; charset=utf-8' },
-    });
     if (url.pathname === '/telegram/menu' && ['GET', 'POST'].includes(request.method)) {
       if (!env.DESKTOP_SYNC_KEY || !sameSecret(request.headers.get('Authorization'),
           `Bearer ${env.DESKTOP_SYNC_KEY}`)) return new Response('Forbidden', { status: 403 });

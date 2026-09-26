@@ -16,6 +16,7 @@ from urllib.request import Request, urlopen
 from PyQt6.QtCore import QLockFile
 
 from core.file_service import read_text_file, write_text_file_atomic
+from core import trash
 
 
 class SyncError(Exception):
@@ -155,7 +156,9 @@ def _sync_once(root: Path, journal_file: Path, api: CloudApi,
                 result.uploaded += 1
             elif previous and unchanged and not is_protected and (remote_changed or existing):
                 if existing:
-                    path.unlink()
+                    # Deleted in Telegram: recoverable here, like a delete in the app.
+                    if not trash.send_to_recycle_bin(path):
+                        path.unlink()
                     result.deleted += 1
                 mark(note, None)
             elif previous and not existing and remote_changed:

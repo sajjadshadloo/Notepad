@@ -49,6 +49,19 @@ export async function handleApi(request, env, notes) {
         ...counts.map(key => body[key]), body.error).run();
     return json({ ok: true });
   }
+  if (url.pathname === '/api/conflicts' && request.method === 'GET') {
+    return json({ conflicts: await notes.openConflicts() });
+  }
+  const conflict = /^\/api\/conflicts\/([0-9a-f-]{36})$/.exec(url.pathname);
+  if (conflict && request.method === 'POST') {
+    let body;
+    try { body = await bodyOf(request); } catch { return json({ error: 'bad_json' }, 400); }
+    if (!['current', 'proposed', 'both'].includes(body?.keep)) return json({ error: 'invalid_choice' }, 400);
+    const result = await notes.resolveConflict(conflict[1], body.keep);
+    if (result.kind === 'missing') return json({ error: 'not_found' }, 404);
+    if (result.kind === 'conflict') return json({ error: 'conflict' }, 409);
+    return json({ ok: true, note: result.note });
+  }
   if (url.pathname === '/api/notes' && request.method === 'GET') {
     return json({ notes: await notes.list() });
   }

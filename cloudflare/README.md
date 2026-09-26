@@ -31,7 +31,7 @@ verify the Worker, then enable the generated `cloud_sync.json`. Pairing a
 second computer needs a separate credential design; running setup there would
 rotate the single desktop key used by this installation.
 
-The Mini App UI lives in `src/miniapp.mjs`, `src/miniapp-client.mjs` and
+The Mini App UI lives in `src/miniapp.mjs` (the frame), `public/app.js` and
 `public/app.css`. Wrangler serves the local Vazirmatn font files from
 `public/fonts`. Before deployment, `npx wrangler dev --port 8787` allows a
 mobile-width browser preview. The interface includes note previews, task

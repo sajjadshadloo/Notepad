@@ -27,3 +27,6 @@ cloudflare/node_modules/
 cloudflare/.dev.vars*
 .tmp-py310-deps/
 .gutter-check.png
+
+# Design hand-offs (kept locally, not in history)
+*.zip

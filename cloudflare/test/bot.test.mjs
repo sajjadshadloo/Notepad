@@ -183,3 +183,54 @@ test('desktop sync status is owner-readable and desktop-writable', async () => {
     assert.equal(second.completed_at, first.completed_at);
   } finally { sqlite.close(); }
 });
+
+test('notes carry the time they last changed', async () => {
+  const { db, sqlite } = database();
+  try {
+    const notes = new D1Notes(db);
+    const before = Date.now();
+    const note = await notes.create('Inbox/a.md', 'یک');
+    assert.ok(note.updated_at >= before);
+    const changed = await notes.change(note.id, 1, 'دو');
+    assert.ok(changed.note.updated_at >= note.updated_at);
+    assert.ok((await notes.list())[0].updated_at >= before);
+  } finally { sqlite.close(); }
+});
+
+test('an open conflict can be listed and settled three ways', async () => {
+  const { db, sqlite } = database();
+  const env = { DB: db, DESKTOP_SYNC_KEY: 'only-for-test' };
+  const call = (path, method = 'GET', body) => worker.fetch(
+    new Request('https://example.com/api' + path, {
+      method, headers: { Authorization: 'Bearer only-for-test' },
+      body: body && JSON.stringify(body),
+    }), env);
+  const notes = new D1Notes(db);
+  const conflictOn = async (messageId, path) => {
+    const created = await notes.createFromMessage(123, messageId, 'اول');
+    sqlite.prepare('UPDATE notes SET path = ?, text = ?, version = 2 WHERE id = ?')
+      .run(path, 'رایانه', created.noteId);
+    await notes.editFromMessage(123, messageId, 'تلگرام');
+    return created.noteId;
+  };
+  try {
+    const kept = await conflictOn(1, 'Inbox/kept.md');
+    const taken = await conflictOn(2, 'Inbox/taken.md');
+    const both = await conflictOn(3, 'Inbox/both.md');
+    const listed = (await (await call('/conflicts')).json()).conflicts;
+    assert.equal(listed.length, 3);
+    assert.equal(listed[0].current_text, 'رایانه');
+    assert.equal(listed[0].proposed_text, 'تلگرام');
+    const id = noteId => listed.find(c => c.note_id === noteId).id;
+    assert.equal((await call('/conflicts/' + id(kept), 'POST', { keep: 'nope' })).status, 400);
+    assert.equal((await call('/conflicts/' + id(kept), 'POST', { keep: 'current' })).status, 200);
+    assert.equal((await call('/conflicts/' + id(taken), 'POST', { keep: 'proposed' })).status, 200);
+    assert.equal((await call('/conflicts/' + id(both), 'POST', { keep: 'both' })).status, 200);
+    assert.equal((await call('/conflicts/' + id(both), 'POST', { keep: 'both' })).status, 404);
+    const texts = Object.fromEntries(sqlite.prepare('SELECT path, text FROM notes').all()
+      .map(row => [row.path, row.text]));
+    assert.deepEqual(texts, { 'Inbox/kept.md': 'رایانه', 'Inbox/taken.md': 'تلگرام',
+      'Inbox/both.md': 'رایانه', 'Inbox/both (2).md': 'تلگرام' });
+    assert.equal((await (await call('/conflicts')).json()).conflicts.length, 0);
+  } finally { sqlite.close(); }
+});

@@ -1,8 +1,25 @@
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
+
+from core import trash
 from core.cloud_sync import sync_once
 from core.cloud_sync_status import record_sync_status
+
+
+@pytest.fixture(autouse=True)
+def recycle_bin(monkeypatch):
+    """A stand-in Recycle Bin: tests must never fill the real one."""
+    binned = []
+
+    def send(path):
+        binned.append(Path(path).name)
+        Path(path).unlink()
+        return True
+
+    monkeypatch.setattr(trash, "send_to_recycle_bin", send)
+    return binned
 
 
 class FakeApi:
@@ -30,7 +47,7 @@ class FakeApi:
         return {"note": note}
 
 
-def test_cloud_file_round_trip_and_delete(tmp_path: Path):
+def test_cloud_file_round_trip_and_delete(tmp_path: Path, recycle_bin):
     root = tmp_path / "notes"
     root.mkdir()
     state = tmp_path / "state.json"
@@ -45,6 +62,8 @@ def test_cloud_file_round_trip_and_delete(tmp_path: Path):
     api.call("/notes/" + remote["id"], "DELETE", {"version": 2})
     assert sync_once(root, state, api).deleted == 1
     assert not path.exists()
+    # A note deleted in Telegram goes to the Recycle Bin, not away for good.
+    assert recycle_bin == ["item.md"]
 
 
 def test_simultaneous_edits_preserve_both(tmp_path: Path):
