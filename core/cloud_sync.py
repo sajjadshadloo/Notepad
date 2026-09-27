@@ -5,6 +5,7 @@ remote revision may only replace one another when the other side still has
 that agreed content. Conflicts are retained as extra files, never discarded.
 """
 
+import difflib
 import hashlib
 import json
 import re
@@ -34,6 +35,53 @@ class SyncResult:
 
 def _hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def merge_lines(base: str, local: str, remote: str) -> str | None:
+    """Combine two edits of one text, line by line, against their common base.
+
+    Edits on different lines are both kept. Lines added at the same place on
+    both sides are both kept, this side's first. Anything else that touches
+    the same lines — or lines right next to each other, where the right order
+    is a guess — returns None, and the caller keeps both copies as before.
+    The result keeps this side's line endings.
+    """
+    newline = "\r\n" if "\r\n" in local else "\n"
+    b, mine, theirs = (t.replace("\r\n", "\n").split("\n") for t in (base, local, remote))
+
+    def edits(other):
+        matcher = difflib.SequenceMatcher(None, b, other, autojunk=False)
+        return [(i1, i2, other[j1:j2]) for tag, i1, i2, j1, j2 in matcher.get_opcodes()
+                if tag != "equal"]
+
+    ours, others = edits(mine), edits(theirs)
+    combined, i, j = [], 0, 0
+    while i < len(ours) or j < len(others):
+        if i == len(ours):
+            combined.append(others[j]); j += 1
+            continue
+        if j == len(others):
+            combined.append(ours[i]); i += 1
+            continue
+        a, c = ours[i], others[j]
+        if a == c:
+            combined.append(a); i += 1; j += 1
+        elif a[0] == a[1] == c[0] == c[1]:
+            combined.append((a[0], a[1], a[2] + [x for x in c[2] if x not in a[2]]))
+            i += 1; j += 1
+        elif a[0] <= c[1] and c[0] <= a[1]:
+            return None
+        elif a[0] < c[0]:
+            combined.append(a); i += 1
+        else:
+            combined.append(c); j += 1
+    out, at = [], 0
+    for start, end, lines in combined:
+        out.extend(b[at:start])
+        out.extend(lines)
+        at = end
+    out.extend(b[at:])
+    return newline.join(out)
 
 
 def _safe_path(root: Path, rel: str) -> Path:
@@ -121,8 +169,11 @@ def _sync_once(root: Path, journal_file: Path, api: CloudApi,
         write_text_file_atomic(journal_file, json.dumps(journal, ensure_ascii=False, indent=2))
 
     def mark(note, text):
+        # The agreed text itself is kept too: it is the common base that lets
+        # an edit made on both sides be merged instead of set aside.
         items[note["id"]] = {"path": note["path"], "version": note["version"],
-                              "hash": _hash(text) if text is not None else None}
+                              "hash": _hash(text) if text is not None else None,
+                              "text": text}
         save()
 
     def conflict(path, note):
@@ -151,6 +202,11 @@ def _sync_once(root: Path, journal_file: Path, api: CloudApi,
         unchanged = previous is not None and (
             (_hash(local) if local is not None else None) == previous["hash"])
         remote_changed = previous is None or note["version"] != previous["version"]
+        if unchanged and local is not None and "text" not in previous:
+            # Journals from before merging kept only a hash. A file that still
+            # matches it *is* the agreed text, so it can serve as the base.
+            previous["text"] = local
+            save()
         if is_protected:
             if remote_changed or not unchanged:
                 result.skipped += 1
@@ -200,7 +256,23 @@ def _sync_once(root: Path, journal_file: Path, api: CloudApi,
             except SyncError:
                 result.conflicts += 1
         elif not unchanged and remote_changed:
-            conflict(path, note)
+            base = previous.get("text")
+            merged = (merge_lines(base, local, note["text"])
+                      if base is not None and local is not None else None)
+            if merged is None:
+                conflict(path, note)
+                continue
+            try:
+                updated = api.call("/notes/" + note["id"], "PUT",
+                                   {"version": note["version"], "text": merged})["note"]
+            except SyncError:
+                # Changed again on the way; the next pass merges once more.
+                result.conflicts += 1
+                continue
+            write_text_file_atomic(path, merged, loaded.encoding)
+            mark(updated, merged)
+            result.downloaded += 1
+            result.uploaded += 1
 
     tracked_paths = {v["path"].casefold() for v in items.values()}
     for path in root.rglob("*"):
