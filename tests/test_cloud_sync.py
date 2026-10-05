@@ -66,7 +66,7 @@ def test_cloud_file_round_trip_and_delete(tmp_path: Path, recycle_bin):
     assert recycle_bin == ["item.md"]
 
 
-def test_simultaneous_edits_preserve_both(tmp_path: Path):
+def test_simultaneous_edits_of_one_line_settle_without_a_conflict_copy(tmp_path: Path):
     root = tmp_path / "notes"
     root.mkdir()
     state = tmp_path / "state.json"
@@ -75,9 +75,11 @@ def test_simultaneous_edits_preserve_both(tmp_path: Path):
     sync_once(root, state, api)
     (root / "n.md").write_text("local", encoding="utf-8")
     api.call("/notes/" + remote["id"], "PUT", {"version": 1, "text": "remote"})
-    assert sync_once(root, state, api).conflicts == 1
+    assert sync_once(root, state, api).conflicts == 0
+    # The more recent edit (the file just written here) wins on both sides.
     assert (root / "n.md").read_text(encoding="utf-8") == "local"
-    assert (root / ("n.sync-conflict-" + remote["id"][:8] + ".md")).read_text(encoding="utf-8") == "remote"
+    assert api.notes[remote["id"]]["text"] == "local"
+    assert not list(root.glob("*.sync-conflict-*"))
 
 
 def test_recreate_a_deleted_local_file(tmp_path: Path):

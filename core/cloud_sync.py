@@ -8,6 +8,7 @@ that agreed content. Conflicts are retained as extra files, never discarded.
 import difflib
 import hashlib
 import json
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +19,9 @@ from PyQt6.QtCore import QLockFile
 
 from core.file_service import read_text_file, write_text_file_atomic
 from core import trash
+
+
+log = logging.getLogger("notepad.cloud_sync")
 
 
 class SyncError(Exception):
@@ -37,14 +41,29 @@ def _hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def merge_lines(base: str, local: str, remote: str) -> str | None:
+@dataclass
+class Merged:
+    text: str
+    # Where both sides changed the same lines differently: (kept, dropped).
+    clashes: list
+
+
+def merge_lines(base: str, local: str, remote: str, prefer_local: bool = True) -> Merged:
     """Combine two edits of one text, line by line, against their common base.
 
-    Edits on different lines are both kept. Lines added at the same place on
-    both sides are both kept, this side's first. Anything else that touches
-    the same lines — or lines right next to each other, where the right order
-    is a guess — returns None, and the caller keeps both copies as before.
-    The result keeps this side's line endings.
+    Edits on different lines are all kept. Lines added at the same place on
+    both sides are all kept, this side's first. Where both sides changed the
+    same lines (or lines right beside each other) differently:
+
+    - both replaced the same number of lines — one task ticked here, re-dated
+      there — the more recent side wins, and what it replaced is returned in
+      `clashes` so it can be logged;
+    - otherwise — a side added or removed lines — both versions are kept,
+      this side's first, so nothing written is lost.
+
+    It never gives up: a conflict that only a person can settle, and that has
+    no place to be settled, just stays conflicted for ever. The result keeps
+    this side's line endings.
     """
     newline = "\r\n" if "\r\n" in local else "\n"
     b, mine, theirs = (t.replace("\r\n", "\n").split("\n") for t in (base, local, remote))
@@ -54,34 +73,48 @@ def merge_lines(base: str, local: str, remote: str) -> str | None:
         return [(i1, i2, other[j1:j2]) for tag, i1, i2, j1, j2 in matcher.get_opcodes()
                 if tag != "equal"]
 
-    ours, others = edits(mine), edits(theirs)
-    combined, i, j = [], 0, 0
-    while i < len(ours) or j < len(others):
-        if i == len(ours):
-            combined.append(others[j]); j += 1
-            continue
-        if j == len(others):
-            combined.append(ours[i]); i += 1
-            continue
-        a, c = ours[i], others[j]
-        if a == c:
-            combined.append(a); i += 1; j += 1
-        elif a[0] == a[1] == c[0] == c[1]:
-            combined.append((a[0], a[1], a[2] + [x for x in c[2] if x not in a[2]]))
-            i += 1; j += 1
-        elif a[0] <= c[1] and c[0] <= a[1]:
-            return None
-        elif a[0] < c[0]:
-            combined.append(a); i += 1
+    tagged = sorted([(*e, 0) for e in edits(mine)] + [(*e, 1) for e in edits(theirs)],
+                    key=lambda e: (e[0], e[1], e[3]))
+
+    def apply(region_start, region_end, side_edits):
+        lines, at = [], region_start
+        for start, end, replacement, _ in side_edits:
+            lines.extend(b[at:start])
+            lines.extend(replacement)
+            at = end
+        lines.extend(b[at:region_end])
+        return lines
+
+    clusters = []
+    for edit in tagged:
+        # Edits that touch or overlap belong to one cluster; so do insertions
+        # at one spot. The right order of neighbours is a guess either way.
+        if clusters and edit[0] <= clusters[-1][1]:
+            clusters[-1][2].append(edit)
+            clusters[-1][1] = max(clusters[-1][1], edit[1])
         else:
-            combined.append(c); j += 1
-    out, at = [], 0
-    for start, end, lines in combined:
+            clusters.append([edit[0], edit[1], [edit]])
+
+    out, at, clashes = [], 0, []
+    for start, end, members in clusters:
         out.extend(b[at:start])
-        out.extend(lines)
+        ours = [e for e in members if e[3] == 0]
+        theirs_ = [e for e in members if e[3] == 1]
+        mine_lines = apply(start, end, ours)
+        their_lines = apply(start, end, theirs_)
+        if not theirs_ or mine_lines == their_lines:
+            out.extend(mine_lines)
+        elif not ours:
+            out.extend(their_lines)
+        elif len(mine_lines) == len(their_lines) and all(e[0] < e[1] for e in members):
+            kept, dropped = (mine_lines, their_lines) if prefer_local else (their_lines, mine_lines)
+            out.extend(kept)
+            clashes.append((kept, dropped))
+        else:
+            out.extend(mine_lines + [x for x in their_lines if x not in mine_lines])
         at = end
     out.extend(b[at:])
-    return newline.join(out)
+    return Merged(newline.join(out), clashes)
 
 
 def _safe_path(root: Path, rel: str) -> Path:
@@ -257,18 +290,24 @@ def _sync_once(root: Path, journal_file: Path, api: CloudApi,
                 result.conflicts += 1
         elif not unchanged and remote_changed:
             base = previous.get("text")
-            merged = (merge_lines(base, local, note["text"])
-                      if base is not None and local is not None else None)
-            if merged is None:
+            if base is None or local is None:
                 conflict(path, note)
                 continue
-            try:
-                updated = api.call("/notes/" + note["id"], "PUT",
-                                   {"version": note["version"], "text": merged})["note"]
-            except SyncError:
-                # Changed again on the way; the next pass merges once more.
-                result.conflicts += 1
-                continue
+            merge = merge_lines(base, local, note["text"],
+                                prefer_local=path.stat().st_mtime * 1000 >= (note.get("updated_at") or 0))
+            merged = merge.text
+            for kept, dropped in merge.clashes:
+                log.info("Merged %s: kept %r, set aside %r", note["path"], kept, dropped)
+            if merged == note["text"]:
+                updated = note
+            else:
+                try:
+                    updated = api.call("/notes/" + note["id"], "PUT",
+                                       {"version": note["version"], "text": merged})["note"]
+                except SyncError:
+                    # Changed again on the way; the next pass merges once more.
+                    result.conflicts += 1
+                    continue
             write_text_file_atomic(path, merged, loaded.encoding)
             mark(updated, merged)
             result.downloaded += 1
