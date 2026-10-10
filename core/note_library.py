@@ -130,7 +130,8 @@ def load_library(root: str | Path) -> list[NoteCard]:
     for path in root_path.rglob("*"):
         if not path.is_file() or path.suffix.lower() not in NOTE_EXTENSIONS:
             continue
-        if path.parent == root_path and path.name == TASKS_FILE:
+        # CLAUDE.md only points Claude Code at AGENTS.md; it is not a note.
+        if path.parent == root_path and path.name in (TASKS_FILE, "CLAUDE.md"):
             continue
         try:
             loaded = read_text_file(path)
