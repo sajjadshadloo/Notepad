@@ -31,3 +31,22 @@ class CloudSyncWorker(QThread):
             record_sync_status(self.state_file.with_name("cloud_sync_status.json"), api,
                                error=str(exc))
             self.completed.emit(None, str(exc))
+
+
+class SettingsTest(QThread):
+    """The server and bot checks behind «ذخیره و تست», off the UI thread."""
+
+    done = pyqtSignal(bool, str)
+
+    def __init__(self, settings, parent=None):
+        super().__init__(parent)
+        self.settings = settings
+
+    def run(self):
+        from core import cloud_config
+
+        try:
+            ok, message = cloud_config.check_all(self.settings)
+        except Exception:
+            ok, message = False, "تست انجام نشد. دوباره امتحان کن."
+        self.done.emit(ok, message)

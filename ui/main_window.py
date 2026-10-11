@@ -54,6 +54,7 @@ from core import task_file, trash
 import core.note_index as note_index
 import core.settings_manager as settings_manager
 from core.external_change_monitor import ExternalChangeMonitor
+from core import cloud_config
 from ui.cloud_sync_worker import CloudSyncWorker
 from core.jalali import to_persian_digits
 from core.tasks import parse_document, parse_task
@@ -1348,6 +1349,7 @@ class MainWindow(QMainWindow):
         self.settings_overlay.tray_changed.connect(self._set_close_to_tray)
         self.settings_overlay.folder_change_requested.connect(self._choose_notes_root)
         self.settings_overlay.sync_requested.connect(self.sync_now)
+        self.settings_overlay.sync_settings_changed.connect(self.sync_now)
 
         self.quick_capture = QuickCapture(self)
         self.quick_capture.task_submitted.connect(self._capture_task)
@@ -1391,13 +1393,9 @@ class MainWindow(QMainWindow):
     # Settings panel
 
     def _settings_state(self) -> dict:
+        settings = cloud_config.load()
         sync = {"enabled": False, "title": "همگام‌سازی خاموش"}
-        try:
-            config = json.loads((settings_manager.app_data_dir() / "cloud_sync.json")
-                                .read_text(encoding="utf-8"))
-            sync["enabled"] = bool(config.get("enabled"))
-        except (OSError, ValueError):
-            pass
+        sync["enabled"] = bool(settings.enabled and settings.url and settings.key)
         if sync["enabled"]:
             sync["title"] = "متصل به Mini App تلگرام"
         report = getattr(self, "_sync_report", None) or {}
@@ -1428,6 +1426,7 @@ class MainWindow(QMainWindow):
             "startup": _run_at_startup_enabled(),
             "tray": self._cfg.get("close_to_tray", True),
             "sync": sync,
+            "sync_settings": settings,
             "shortcuts": shortcuts,
         }
 
@@ -2309,17 +2308,20 @@ class MainWindow(QMainWindow):
     def sync_now(self):
         if self._closing_application or (self._sync_worker and self._sync_worker.isRunning()):
             return
-        config_file = settings_manager.app_data_dir() / "cloud_sync.json"
+        settings = cloud_config.load()
+        if not settings.enabled:
+            self.top_bar.set_sync("همگام‌سازی خاموش", "off")
+            return
+        if not (settings.url and settings.key):
+            self.top_bar.set_sync("همگام · تنظیم نشده", "off",
+                                  "آدرس سرور و کلید را در تنظیمات ← همگام‌سازی بگذار.")
+            return
         try:
-            config = json.loads(config_file.read_text(encoding="utf-8"))
-            if not config.get("enabled"):
-                self.top_bar.set_sync("همگام‌سازی خاموش", "off")
-                return
             protected = {tab.path for index in range(self.tabs.count())
                          if (tab := self.tabs.widget(index)).path and tab.modified}
             self._sync_worker = CloudSyncWorker(
                 self._cfg["notes_root"], settings_manager.app_data_dir() / "cloud_sync_state.json",
-                config["url"], config["key"], protected, self, config.get("proxy", ""))
+                settings.url, settings.key, protected, self, settings.proxy)
             worker = self._sync_worker
             worker.completed.connect(self._sync_finished)
             worker.finished.connect(worker.deleteLater)
@@ -2356,6 +2358,7 @@ class MainWindow(QMainWindow):
         """
         self._closing_application = True
         self._sync_timer.stop()
+        self.settings_overlay.wait_for_test()
         if self._tasks_watcher is not None:
             self._tasks_watcher.stop()
         worker = self._sync_worker

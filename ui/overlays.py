@@ -10,10 +10,12 @@ from datetime import date, timedelta
 from PyQt6.QtCore import QEvent, QPoint, QPointF, QRectF, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFontMetricsF, QPainter
 from PyQt6.QtWidgets import (
+    QApplication,
     QFrame,
     QGraphicsDropShadowEffect,
     QGraphicsOpacityEffect,
     QHBoxLayout,
+    QLabel,
     QLineEdit,
     QScrollArea,
     QSizePolicy,
@@ -21,6 +23,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from core import cloud_config
 from core.jalali import MONTHS, from_gregorian, to_persian_digits
 from core.when import day_label, parse_preview, parse_when, weekday_name
 from ui.kit import (
@@ -39,6 +42,7 @@ from ui.kit import (
     tint,
     transparent_scroll,
 )
+from ui.cloud_sync_worker import SettingsTest
 from ui.styles import PALETTES, current_palette
 
 
@@ -837,6 +841,23 @@ class _NavItem(Clickable):
         p.end()
 
 
+def _guide_html() -> str:
+    """The server guide as the settings screen shows it."""
+    from html import escape
+
+    parts = []
+    for kind, text in cloud_config.GUIDE:
+        if kind == "h":
+            parts.append(f"<p style='font-weight:600; margin-top:14px'>{escape(text)}</p>")
+        elif kind == "code":
+            parts.append(
+                f"<pre dir='ltr' style='background-color:{col('surface_alt').name()}; "
+                f"white-space:pre-wrap; padding:8px'>{escape(text)}</pre>")
+        else:
+            parts.append(f"<p style='margin:4px 0'>{escape(text)}</p>")
+    return "".join(parts)
+
+
 class SettingsPanel(Overlay):
     """Ctrl+, — عمومی، ظاهر، همگام‌سازی، میان‌برها. Changes apply at once."""
 
@@ -848,6 +869,8 @@ class SettingsPanel(Overlay):
     tray_changed = pyqtSignal(bool)
     folder_change_requested = pyqtSignal()
     sync_requested = pyqtSignal()
+    # The sync settings were saved (and tested): the window syncs with them now.
+    sync_settings_changed = pyqtSignal()
 
     SECTIONS = (("general", "عمومی"), ("look", "ظاهر"), ("sync", "همگام‌سازی"), ("keys", "میان‌برها"))
 
@@ -857,6 +880,8 @@ class SettingsPanel(Overlay):
         self._version = version
         self._state: dict = {}
         self._section = "look"
+        self._test = None
+        self._busy = False
 
         row = QHBoxLayout(card)
         row.setContentsMargins(1, 1, 1, 1)
@@ -978,15 +1003,157 @@ class SettingsPanel(Overlay):
 
     def _build_sync(self, column):
         sync = self._state.get("sync", {})
+        settings = self._state.get("sync_settings") or cloud_config.SyncSettings()
         column.addSpacing(16)
         card = _SyncCard(sync)
         card.check.clicked.connect(self.sync_requested)
         column.addWidget(card)
         column.addSpacing(14)
-        note = _Paragraph(
+        column.addWidget(_Paragraph(
             "فایل‌ها همیشه روی همین رایانه می‌مانند؛ همگام‌سازی فقط نسخه‌ای برای گوشی نگه می‌دارد."
-            " اگر فایل بازی هم این‌جا و هم در گوشی تغییر کند، برنامه برای انتخاب نسخه سؤال می‌کند.")
-        column.addWidget(note)
+            " اگر فایلی هم این‌جا و هم در گوشی تغییر کند، تغییرها ترکیب می‌شوند."
+            " فقط اگر همان خط در هر دو جا فرق کرده باشد، نسخه‌ی جدیدتر می‌ماند."))
+
+        column.addSpacing(20)
+        column.addWidget(_Label("اتصال به سرور", 13.5, 600))
+        column.addSpacing(8)
+        self._url = self._line("https://نام-شما.workers.dev", settings.url)
+        column.addWidget(self._labelled("آدرس سرور", self._field(self._url)))
+        column.addSpacing(10)
+        self._key = self._line("کلید همگام‌سازی", settings.key, secret=True)
+        column.addWidget(self._labelled("کلید همگام‌سازی", self._field(
+            self._key,
+            self._button("نمایش", lambda: self._reveal(self._key)),
+            self._button("ساخت کلید", self._make_key))))
+        self._enabled = Toggle(settings.enabled)
+        column.addWidget(_SettingRow("همگام‌سازی روشن",
+                                     "خاموش باشد، برنامه به سرور وصل نمی‌شود.", self._enabled))
+
+        column.addSpacing(18)
+        column.addWidget(_Label("تلگرام (اختیاری)", 13.5, 600))
+        column.addSpacing(8)
+        self._token = self._line("123456:ABC…", settings.bot_token, secret=True)
+        column.addWidget(self._labelled("توکن بات تلگرام", self._field(
+            self._token, self._button("نمایش", lambda: self._reveal(self._token)))))
+        column.addWidget(_Paragraph(
+            "این توکن فقط برای «تست بات» همین‌جا به کار می‌رود. بات روی سرور کار می‌کند،"
+            " پس توکن را آن‌جا هم بگذار (راهنمای پایین)."))
+
+        column.addSpacing(16)
+        save_row = QHBoxLayout()
+        save_row.setContentsMargins(0, 0, 0, 0)
+        self._save = Button("ذخیره و تست", None, height=36, radius=9, padding=(18, 18), px=13,
+                            weight=600, normal={"bg": "accent", "fg": "on_accent"},
+                            hover={"bg": "accent_hover"})
+        self._save.clicked.connect(self._save_sync)
+        save_row.addWidget(self._save)
+        save_row.addStretch(1)
+        column.addLayout(save_row)
+        self._result = QLabel("")
+        self._result.setWordWrap(True)
+        column.addWidget(self._result)
+
+        column.addSpacing(18)
+        guide = QLabel(_guide_html())
+        guide.setTextFormat(Qt.TextFormat.RichText)
+        guide.setWordWrap(True)
+        guide.setFont(font(12.5))
+        guide.setStyleSheet(f"color: {col('text').name()};")
+        guide.setHidden(True)
+        guide_button = self._button("راهنمای ساخت سرور", lambda: guide.setHidden(not guide.isHidden()))
+        column.addWidget(guide_button, 0, Qt.AlignmentFlag.AlignLeft)
+        column.addWidget(guide)
+
+    def _line(self, placeholder: str, text: str, secret: bool = False) -> QLineEdit:
+        edit = QLineEdit(text)
+        edit.setPlaceholderText(placeholder)
+        edit.setFrame(False)
+        edit.setFont(font(13))
+        edit.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        edit.setStyleSheet(f"QLineEdit {{ background: transparent; border: none; color: {col('text').name()}; }}")
+        if secret:
+            edit.setEchoMode(QLineEdit.EchoMode.Password)
+        return edit
+
+    def _field(self, edit: QLineEdit, *buttons) -> QWidget:
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        well = _Field(38, 10, "surface_alt", "border", 12)
+        well.set_editor(edit)
+        layout.addWidget(well, 1)
+        for button in buttons:
+            layout.addWidget(button)
+        return row
+
+    def _labelled(self, text: str, widget: QWidget) -> QWidget:
+        box = QWidget()
+        column = QVBoxLayout(box)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(6)
+        column.addWidget(_Label(text, 12.5, colour="muted"))
+        column.addWidget(widget)
+        return box
+
+    def _button(self, label: str, action) -> Button:
+        button = Button(label, None, height=32, radius=8, padding=(14, 14), px=12.5,
+                        normal={"bg": "surface_alt", "fg": "text", "border": "border"},
+                        hover={"border": "accent"})
+        button.clicked.connect(action)
+        return button
+
+    def _reveal(self, edit: QLineEdit):
+        hidden = edit.echoMode() == QLineEdit.EchoMode.Password
+        edit.setEchoMode(QLineEdit.EchoMode.Normal if hidden else QLineEdit.EchoMode.Password)
+
+    def _make_key(self):
+        key = cloud_config.new_secret()
+        self._key.setEchoMode(QLineEdit.EchoMode.Normal)
+        self._key.setText(key)
+        QApplication.clipboard().setText(key)
+        self._say("کلید ساخته شد و کپی شد. همان را روی سرور بگذار (راهنمای پایین) و «ذخیره و تست» را بزن."
+                  " اگر قبلاً کلید دیگری روی سرور گذاشته‌ای، باید آن‌جا هم عوض شود.", ok=True)
+
+    def _save_sync(self):
+        if self._busy:
+            return
+        previous = self._state.get("sync_settings") or cloud_config.SyncSettings()
+        settings = cloud_config.SyncSettings(
+            enabled=self._enabled.on, url=self._url.text().strip(),
+            key=self._key.text().strip(), bot_token=self._token.text().strip(),
+            proxy=previous.proxy)
+        problem = (cloud_config.address_problem(settings.url) or cloud_config.key_problem(settings.key)
+                   or cloud_config.token_problem(settings.bot_token))
+        if problem:
+            self._say(problem, ok=False)
+            return
+        try:
+            cloud_config.save(settings)
+        except OSError:
+            self._say("تنظیمات ذخیره نشد. دوباره امتحان کن.", ok=False)
+            return
+        self._state["sync_settings"] = settings
+        self._busy = True
+        self._say("ذخیره شد. در حال تست…", ok=True)
+        self._test = SettingsTest(settings, self)
+        self._test.done.connect(self._test_done)
+        self._test.start()
+
+    def _test_done(self, ok: bool, message: str):
+        self._busy = False
+        self._say(message, ok=ok)
+        self.sync_settings_changed.emit()
+
+    def _say(self, text: str, ok: bool):
+        self._result.setText(text)
+        self._result.setWordWrap(True)
+        self._result.setStyleSheet(f"color: {col('accent' if ok else 'danger').name()}; font-size: 12.5px;")
+
+    def wait_for_test(self):
+        """Before the app quits: a test thread must not outlive the window."""
+        if self._test is not None and self._test.isRunning():
+            self._test.wait(20_000)
 
     def _build_keys(self, column):
         for label, keys in self._state.get("shortcuts", []):

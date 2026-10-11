@@ -25,7 +25,8 @@ log = logging.getLogger("notepad.cloud_sync")
 
 
 class SyncError(Exception):
-    pass
+    # The HTTP status, when the server answered at all.
+    status = None
 
 
 @dataclass
@@ -153,7 +154,9 @@ class CloudApi:
         except HTTPError as exc:
             if exc.code == 409:
                 raise SyncError("Cloud version conflict") from exc
-            raise SyncError(f"Cloud request failed ({exc.code})") from exc
+            error = SyncError(f"Cloud request failed ({exc.code})")
+            error.status = exc.code
+            raise error from exc
         except (OSError, ValueError) as exc:
             # Say which way it failed: a timeout, a refused proxy and a page
             # that is not JSON all need different fixes.
