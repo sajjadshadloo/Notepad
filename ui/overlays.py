@@ -1037,7 +1037,7 @@ class SettingsPanel(Overlay):
         card = _SyncCard(sync)
         card.check.clicked.connect(self.sync_requested)
         column.addWidget(card)
-        column.addSpacing(18)
+        column.addSpacing(16)
         column.addWidget(_Label("اتصال با تلگرام", 14, 600))
         column.addSpacing(8)
         column.addWidget(_Paragraph("نیازی به تنظیم سرور یا ساخت بات نیست. اتصال را شروع کن و کد تطبیق را در تلگرام تأیید کن."))
@@ -1054,7 +1054,7 @@ class SettingsPanel(Overlay):
             "نسخه‌ای از فایل‌های متنی آن روی سرور نوت‌پد ذخیره می‌شود.", self._share_folder))
         self._exclude = self._line('Private, پوشهٔ دیگر', ', '.join(settings.excluded_paths or ('Private',)))
         column.addWidget(self._labelled('پوشه‌های مستثنا از همگام‌سازی (با کاما جدا کن)', self._field(self._exclude)))
-        column.addSpacing(12)
+        column.addSpacing(8)
 
         def action_button(label, action, *, primary=False):
             button = Button(label, None, height=38, radius=9, padding=(12, 12), px=12.5,
@@ -1101,7 +1101,7 @@ class SettingsPanel(Overlay):
         advanced_column.setContentsMargins(0, 0, 0, 0)
         column.addSpacing(16)
         column.addWidget(_Rule('divider'))
-        column.addSpacing(12)
+        column.addSpacing(8)
         column.addWidget(action_button('تنظیمات پیشرفته / سرور شخصی', lambda: advanced.setHidden(not advanced.isHidden())))
         column.addWidget(advanced)
         advanced.setHidden(True)
