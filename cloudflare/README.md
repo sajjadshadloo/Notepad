@@ -2,7 +2,7 @@
 
 Worker: `https://notepad-plus-bot.sajadshadlloo23.workers.dev`.
 The 4.4.0 beta supports separate accounts on one Worker/D1.
-See [rollout and verification](../MULTI-USER-IMPLEMENTATION.md).
+See [rollout and verification](../docs/MULTI-USER-IMPLEMENTATION.md).
 
 ## Identity and data
 
@@ -24,7 +24,7 @@ even when /start and health checks work. After deployment the administrator
 should inspect `GET /telegram/webhook-settings` using the existing owner key.
 Its guarded POST repairs the filter without dropping queued updates; it refuses
 to overwrite a webhook pointing to another URL. Public device keys cannot use
-these administrator endpoints. See the [2026-10-18 incident](../CONNECTION-INCIDENT-2026-10-18.md).
+these administrator endpoints. See the 2026-10-18 incident.
 
 ## Pairing
 
