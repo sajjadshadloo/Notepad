@@ -15,13 +15,15 @@ log = logging.getLogger(__name__)
 NOTE_EXTENSIONS = (".txt", ".md", ".markdown")
 
 
-def scan_folder(root: str) -> list[Task]:
+def scan_folder(root: str, cancelled=lambda: False) -> list[Task]:
     """Every task in the notes tree. Meant to run off the UI thread."""
     found: list[Task] = []
     root_path = Path(root)
     if not root_path.exists():
         return found
     for path in root_path.rglob("*"):
+        if cancelled():
+            return []
         if not path.is_file() or path.suffix.lower() not in NOTE_EXTENSIONS:
             continue
         try:

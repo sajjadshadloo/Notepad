@@ -13,6 +13,20 @@ dist/
 
 # App data / user content
 data/notes.json
+# Local credentials and runtime state must never enter a release/source archive.
+.env
+.env.*
+!.env.example
+.dev.vars*
+*.pem
+*.pfx
+*.p12
+*.sqlite
+*.sqlite3
+*.db
+*.log
+cloud_sync.json
+settings.json
 
 # OS
 Thumbs.db

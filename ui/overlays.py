@@ -6,6 +6,8 @@ holds one card with a 60px shadow: the command palette (Ctrl+K), settings
 focus-mode pill are smaller: they sit over the page without a backdrop.
 """
 from datetime import date, timedelta
+from dataclasses import replace
+from pathlib import Path
 
 from PyQt6.QtCore import QEvent, QPoint, QPointF, QRectF, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFontMetricsF, QPainter
@@ -23,7 +25,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from core import cloud_config
+from core import cloud_config, settings_manager
 from core.jalali import MONTHS, from_gregorian, to_persian_digits
 from core.when import day_label, parse_preview, parse_when, weekday_name
 from ui.kit import (
@@ -42,7 +44,8 @@ from ui.kit import (
     tint,
     transparent_scroll,
 )
-from ui.cloud_sync_worker import SettingsTest
+from ui.cloud_sync_worker import SettingsTest, PairingWorker, DisconnectWorker, OpenLinkWorker
+from ui.background import start_background
 from ui.styles import PALETTES, current_palette
 
 
@@ -872,15 +875,23 @@ class SettingsPanel(Overlay):
     # The sync settings were saved (and tested): the window syncs with them now.
     sync_settings_changed = pyqtSignal()
 
-    SECTIONS = (("general", "عمومی"), ("look", "ظاهر"), ("sync", "همگام‌سازی"), ("keys", "میان‌برها"))
+    SECTIONS = (("general", "عمومی"), ("look", "ظاهر"), ("sync", "همگام‌سازی"),
+                ("updates", "به‌روزرسانی"), ("diagnostics", "گزارش و عیب‌یابی"), ("keys", "میان‌برها"))
 
     def __init__(self, window, version: str):
         card = Card("panel", 16)
         super().__init__(window, card, 780, height=540)
         self._version = version
+        self._updates = getattr(window, 'updates', None)
         self._state: dict = {}
         self._section = "look"
         self._test = None
+        self._pairing = None
+        self._disconnect = None
+        self._opener = None
+        self._confirm_code = ''
+        self._pair_message = ''
+        self._pair_link = ""
         self._busy = False
 
         row = QHBoxLayout(card)
@@ -938,7 +949,12 @@ class SettingsPanel(Overlay):
         self.open()
 
     def show_section(self, key: str):
+        if key not in ('sync', 'diagnostics', 'updates') and self._pairing is not None and self._pairing.isRunning():
+            self._pairing.requestInterruption()
         self._section = key
+        self._height = 680 if key == 'diagnostics' else 540
+        if self.isVisible():
+            self._place()
         for k, item in self._nav.items():
             item.active = k == key
             item.update()
@@ -969,6 +985,19 @@ class SettingsPanel(Overlay):
             toggle = Toggle(bool(s.get(key)))
             toggle.toggled.connect(signal)
             column.addWidget(_SettingRow(label, hint, toggle))
+
+    def _build_diagnostics(self, column):
+        from ui.diagnostics_panel import DiagnosticsPanel
+
+        self.diagnostics_panel = DiagnosticsPanel(self._version)
+        column.addWidget(self.diagnostics_panel)
+
+    def _build_updates(self, column):
+        from ui.app_updates import UpdateController, UpdatesPanel
+
+        if self._updates is None:
+            self._updates = UpdateController(self._version, settings_manager.load(), self)
+        column.addWidget(UpdatesPanel(self._updates))
 
     def _build_look(self, column):
         s = self._state
@@ -1008,11 +1037,75 @@ class SettingsPanel(Overlay):
         card = _SyncCard(sync)
         card.check.clicked.connect(self.sync_requested)
         column.addWidget(card)
-        column.addSpacing(14)
-        column.addWidget(_Paragraph(
-            "فایل‌ها همیشه روی همین رایانه می‌مانند؛ همگام‌سازی فقط نسخه‌ای برای گوشی نگه می‌دارد."
-            " اگر فایلی هم این‌جا و هم در گوشی تغییر کند، تغییرها ترکیب می‌شوند."
-            " فقط اگر همان خط در هر دو جا فرق کرده باشد، نسخه‌ی جدیدتر می‌ماند."))
+        column.addSpacing(18)
+        column.addWidget(_Label("اتصال با تلگرام", 14, 600))
+        column.addSpacing(8)
+        column.addWidget(_Paragraph("نیازی به تنظیم سرور یا ساخت بات نیست. اتصال را شروع کن و کد تطبیق را در تلگرام تأیید کن."))
+        root = self._state.get('notes_root', '')
+        folder = QLabel(root or 'پوشهٔ یادداشت‌ها در بخش عمومی انتخاب می‌شود.')
+        folder.setWordWrap(True)
+        folder.setTextFormat(Qt.TextFormat.PlainText)
+        folder.setFont(font(12))
+        folder.setStyleSheet(f"color: {col('soft').name()};")
+        column.addWidget(folder)
+        column.addSpacing(8)
+        self._share_folder = Toggle(False)
+        column.addWidget(_SettingRow("همگام‌سازی این پوشه را می‌پذیرم",
+            "نسخه‌ای از فایل‌های متنی آن روی سرور نوت‌پد ذخیره می‌شود.", self._share_folder))
+        self._exclude = self._line('Private, پوشهٔ دیگر', ', '.join(settings.excluded_paths or ('Private',)))
+        column.addWidget(self._labelled('پوشه‌های مستثنا از همگام‌سازی (با کاما جدا کن)', self._field(self._exclude)))
+        column.addSpacing(12)
+
+        def action_button(label, action, *, primary=False):
+            button = Button(label, None, height=38, radius=9, padding=(12, 12), px=12.5,
+                            weight=600 if primary else 400,
+                            normal={"bg": "accent" if primary else "surface_alt",
+                                    "fg": "on_accent" if primary else "text",
+                                    "border": None if primary else "border"},
+                            hover={"bg": "accent_hover"} if primary else {"border": "accent"})
+            # Button normally fixes its width to its text. These actions share
+            # the available row width, independently of their Persian labels.
+            button.setMinimumWidth(0)
+            button.setMaximumWidth(16777215)
+            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            button.clicked.connect(action)
+            return button
+
+        connect_row = QHBoxLayout()
+        connect_row.setContentsMargins(0, 0, 0, 0)
+        connect_row.setSpacing(8)
+        self._connect = action_button('اتصال به تلگرام', self._begin_pairing, primary=True)
+        self._connect.setEnabled(not self._busy)
+        connect_row.addWidget(self._connect, 1)
+        connect_row.addWidget(action_button('بازکردن تلگرام', self._open_pair_link), 1)
+        connect_row.addWidget(action_button('لغو درخواست', self._cancel_pairing), 1)
+        column.addLayout(connect_row)
+        self._copy_pair_link = action_button('کپی لینک اتصال', self._copy_link)
+        self._copy_pair_link.setEnabled(bool(self._pair_link))
+        column.addWidget(self._copy_pair_link)
+        column.addSpacing(8)
+        self._pair_status = QLabel(self._pair_message or ('اتصال این رایانه ذخیره شده است.' if settings.device_id else ''))
+        self._pair_status.setTextFormat(Qt.TextFormat.PlainText)
+        self._pair_status.setWordWrap(True)
+        self._pair_status.setFont(font(12))
+        self._pair_status.setStyleSheet(f"color: {col('accent').name()};")
+        self._pair_status.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute | Qt.AlignmentFlag.AlignVCenter)
+        column.addWidget(self._pair_status)
+        if settings.device_id:
+            column.addSpacing(8)
+            column.addWidget(action_button('قطع اتصال این رایانه', self._disconnect_pairing))
+
+        # The personal-server form remains available for existing installations.
+        advanced = QWidget()
+        advanced_column = QVBoxLayout(advanced)
+        advanced_column.setContentsMargins(0, 0, 0, 0)
+        column.addSpacing(16)
+        column.addWidget(_Rule('divider'))
+        column.addSpacing(12)
+        column.addWidget(action_button('تنظیمات پیشرفته / سرور شخصی', lambda: advanced.setHidden(not advanced.isHidden())))
+        column.addWidget(advanced)
+        advanced.setHidden(True)
+        column = advanced_column
 
         column.addSpacing(20)
         column.addWidget(_Label("اتصال به سرور", 13.5, 600))
@@ -1108,6 +1201,9 @@ class SettingsPanel(Overlay):
         edit.setEchoMode(QLineEdit.EchoMode.Normal if hidden else QLineEdit.EchoMode.Password)
 
     def _make_key(self):
+        if (self._state.get('sync_settings') or cloud_config.SyncSettings()).device_id:
+            self._say('برای اتصال مدیریت‌شده، کلید خودکار ساخته می‌شود. از دکمهٔ اتصال به تلگرام استفاده کن.', ok=False)
+            return
         key = cloud_config.new_secret()
         self._key.setEchoMode(QLineEdit.EchoMode.Normal)
         self._key.setText(key)
@@ -1122,7 +1218,11 @@ class SettingsPanel(Overlay):
         settings = cloud_config.SyncSettings(
             enabled=self._enabled.on, url=self._url.text().strip(),
             key=self._key.text().strip(), bot_token=self._token.text().strip(),
-            proxy=previous.proxy)
+            proxy=previous.proxy, user_id=previous.user_id, device_id=previous.device_id,
+            confirmed_root=previous.confirmed_root, excluded_paths=previous.excluded_paths)
+        if previous.device_id and (settings.url != previous.url or settings.key != previous.key):
+            self._say('آدرس و کلید این اتصال خودکار مدیریت می‌شوند. از اتصال به تلگرام استفاده کن.', ok=False)
+            return
         problem = (cloud_config.address_problem(settings.url) or cloud_config.key_problem(settings.key)
                    or cloud_config.token_problem(settings.bot_token))
         if problem:
@@ -1142,7 +1242,8 @@ class SettingsPanel(Overlay):
 
     def _test_done(self, ok: bool, message: str):
         self._busy = False
-        self._say(message, ok=ok)
+        if self._section == 'sync':
+            self._say(message, ok=ok)
         self.sync_settings_changed.emit()
 
     def _say(self, text: str, ok: bool):
@@ -1154,6 +1255,119 @@ class SettingsPanel(Overlay):
         """Before the app quits: a test thread must not outlive the window."""
         if self._test is not None and self._test.isRunning():
             self._test.wait(20_000)
+        if self._pairing is not None and self._pairing.isRunning():
+            self._pairing.requestInterruption()
+            self._pairing.wait(20_000)
+        if self._disconnect is not None and self._disconnect.isRunning():
+            self._disconnect.wait(20_000)
+
+    def _begin_pairing(self):
+        if self._busy:
+            return
+        root = self._state.get('notes_root', '')
+        if not root or not self._share_folder.on:
+            self._pair_status.setText('ابتدا پوشهٔ یادداشت‌ها و پذیرش همگام‌سازی آن را مشخص کن.')
+            return
+        previous = self._state.get('sync_settings') or cloud_config.SyncSettings()
+        excluded = tuple(p.strip().replace('\\', '/').strip('/') for p in self._exclude.text().replace('،', ',').split(',') if p.strip())
+        if any(p.startswith('.') or ':' in p or '..' in p.split('/') or not p for p in excluded):
+            self._pair_status.setText('نام پوشه‌های مستثنا باید مسیر نسبی و معتبر باشد.')
+            return
+        self._busy = True
+        self._confirm_code = ''
+        self._connect.setEnabled(False)
+        self._pair_status.setText('در حال آماده‌کردن اتصال…')
+        self._pairing = PairingWorker(previous, root, excluded, self)
+        self._pairing.ready.connect(self._pairing_ready)
+        self._pairing.progress.connect(self._pairing_progress)
+        self._pairing.done.connect(self._pairing_done)
+        self._pairing.start()
+
+    def _pairing_ready(self, info):
+        self._pair_link = info['telegram_url']
+        self._confirm_code = info['confirm_code']
+        self._pair_message = 'کد تطبیق: ' + self._confirm_code + '\nهمین کد را در بات بررسی و اتصال را تأیید کن.'
+        if self._section == 'sync':
+            self._copy_pair_link.setEnabled(True)
+            self._pair_status.setText(self._pair_message)
+            QTimer.singleShot(0, self._reveal_pair_status)
+        if self._section in ('sync', 'diagnostics', 'updates'):
+            self._open_pair_link()
+
+    def _reveal_pair_status(self):
+        if self._section == 'sync' and self.isVisible():
+            self.scroll.ensureWidgetVisible(self._pair_status, 0, 20)
+
+    def _pairing_progress(self, message):
+        self._pair_message = 'کد تطبیق: ' + self._confirm_code + '\n' + message
+        if self._section == 'sync':
+            self._pair_status.setText(self._pair_message)
+
+    def _open_pair_link(self):
+        if self._pair_link and (self._opener is None or not self._opener.isRunning()):
+            self._opener = OpenLinkWorker(self._pair_link)
+            self._opener.done.connect(self._link_opened)
+            self._opener.finished.connect(self._link_finished)
+            start_background(self._opener)
+
+    def _copy_link(self):
+        if self._pair_link:
+            QApplication.clipboard().setText(self._pair_link)
+
+    def _link_finished(self):
+        self._opener = None
+
+    def _link_opened(self, link, opened):
+        if not opened and link == self._pair_link:
+            self._pairing_progress('مرورگر باز نشد. با دکمهٔ «کپی لینک اتصال» لینک را در مرورگر باز کن.')
+
+    def _cancel_pairing(self):
+        if self._pairing is not None:
+            self._pairing.requestInterruption()
+
+    def _pairing_done(self, settings, error):
+        self._busy = False
+        self._pair_link = ''
+        if settings is not None:
+            try:
+                cloud_config.save(settings)
+                self._state['sync_settings'] = settings
+                self._state['sync'] = {**self._state.get('sync', {}), 'enabled': True,
+                                       'title': 'اتصال ذخیره شد؛ در انتظار بررسی همگام‌سازی'}
+                self.sync_settings_changed.emit()
+            except OSError:
+                error = 'اتصال تأیید شد ولی تنظیمات ذخیره نشد؛ دوباره تلاش کن.'
+        self._pair_message = error or 'اتصال برقرار شد. همگام‌سازی پوشهٔ تأییدشده آغاز می‌شود.'
+        if self._section == 'sync':
+            self.show_section('sync')
+            self._pair_status.setText(self._pair_message)
+            QTimer.singleShot(0, self._reveal_pair_status)
+
+    def _disconnect_pairing(self):
+        if self._busy:
+            return
+        settings = self._state.get('sync_settings') or cloud_config.SyncSettings()
+        if not settings.device_id:
+            return
+        paused = replace(settings, enabled=False)
+        try:
+            cloud_config.save(paused)
+        except OSError:
+            self._pair_status.setText('تنظیمات ذخیره نشد. دوباره تلاش کن.')
+            return
+        self._state['sync_settings'] = paused
+        self.sync_settings_changed.emit()
+        self._busy = True
+        self._pair_status.setText('همگام‌سازی خاموش شد؛ در حال قطع دسترسی سرور…')
+        self._disconnect = DisconnectWorker(settings, self)
+        self._disconnect.done.connect(self._disconnected)
+        self._disconnect.start()
+
+    def _disconnected(self, ok):
+        self._busy = False
+        if self._section == 'sync':
+            self._pair_status.setText('اتصال قطع شد. فایل‌های محلی باقی می‌مانند.' if ok else
+                'همگام‌سازی خاموش است؛ سرور در دسترس نبود. برای لغو دسترسی از /devices در بات استفاده کن.')
 
     def _build_keys(self, column):
         for label, keys in self._state.get("shortcuts", []):
@@ -1292,8 +1506,8 @@ class MorningReview(Overlay):
         head = QVBoxLayout()
         head.setContentsMargins(24, 24, 24, 16)
         head.setSpacing(4)
-        head.addWidget(_Label("مرور صبحگاهی", 12.5, 600, "accent"))
-        self._hello = _Label("صبح بخیر" + ("، " + name if name else ""), 21, 700)
+        head.addWidget(_Label("مرور روز", 12.5, 600, "accent"))
+        self._hello = _Label("", 21, 700)
         head.addWidget(self._hello)
         self._sub = _Label("", 12.5, colour="muted")
         head.addWidget(self._sub)
@@ -1315,11 +1529,17 @@ class MorningReview(Overlay):
         self.all_today.clicked.connect(self._all_to_today)
         foot_row.addWidget(self.all_today)
         foot_row.addStretch(1)
-        start = Button("شروع روز", None, height=36, radius=9, padding=(20, 20), px=13, weight=600,
+        start = Button("شروع کار", None, height=36, radius=9, padding=(20, 20), px=13, weight=600,
                        normal={"bg": "accent", "fg": "on_accent"}, hover={"bg": "accent_hover"})
         start.clicked.connect(self.close_overlay)
         foot_row.addWidget(start)
         column.addWidget(foot)
+
+    def open(self):
+        from core.greeting import greeting
+
+        self._hello.set_text(greeting() + ("، " + self._name if self._name else ""))
+        super().open()
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:

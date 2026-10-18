@@ -115,7 +115,7 @@ def summarise(text: str, path: Path, folder: str, modified: float) -> NoteCard:
     )
 
 
-def load_library(root: str | Path) -> list[NoteCard]:
+def load_library(root: str | Path, cancelled=lambda: False) -> list[NoteCard]:
     """Every note under `root`, newest first.
 
     The tasks file is left out: it has the whole right-hand rail to itself,
@@ -128,6 +128,8 @@ def load_library(root: str | Path) -> list[NoteCard]:
     if not root_path.exists():
         return cards
     for path in root_path.rglob("*"):
+        if cancelled():
+            return []
         if not path.is_file() or path.suffix.lower() not in NOTE_EXTENSIONS:
             continue
         # CLAUDE.md only points Claude Code at AGENTS.md; it is not a note.

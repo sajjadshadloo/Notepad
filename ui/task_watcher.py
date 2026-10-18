@@ -17,6 +17,7 @@ from PyQt6.QtCore import QObject, QThread, QTimer, pyqtSignal
 
 from core.task_scan import scan_folder
 from core.tasks import Task, sort_for_today, today_progress
+from ui.background import start_background
 
 log = logging.getLogger(__name__)
 
@@ -36,7 +37,9 @@ class _ScanWorker(QThread):
 
     def run(self):
         try:
-            self.scanned.emit(scan_folder(self._root))
+            tasks = scan_folder(self._root, self.isInterruptionRequested)
+            if not self.isInterruptionRequested():
+                self.scanned.emit(tasks)
         except Exception:
             log.warning("Task scan failed", exc_info=True)
             self.scanned.emit([])
@@ -56,6 +59,7 @@ class TaskWatcher(QObject):
         self._tasks: list[Task] = []
         self._worker: _ScanWorker | None = None
         self._stopped = False
+        self._scan_again = False
         self._timer = QTimer(self, interval=RESCAN_INTERVAL_MS)
         self._timer.timeout.connect(self.check_now)
 
@@ -65,6 +69,10 @@ class TaskWatcher(QObject):
 
     def set_root(self, root: str):
         self._root = root
+        self._tasks = []
+        if self._worker is not None:
+            self._worker.requestInterruption()
+        self.check_now()
 
     def open_tasks(self) -> list[Task]:
         """Unfinished tasks from the last scan, most urgent first.
@@ -85,13 +93,24 @@ class TaskWatcher(QObject):
     def check_now(self):
         if self._stopped:
             return
-        if self._worker is not None and self._worker.isRunning():
+        if self._worker is not None:
+            self._scan_again = True
             return
         self._worker = _ScanWorker(self._root, self)
         self._worker.scanned.connect(self._handle_tasks)
-        self._worker.start()
+        self._worker.finished.connect(self._scan_finished)
+        start_background(self._worker)
+
+    def _scan_finished(self):
+        self._worker = None
+        if self._scan_again:
+            self._scan_again = False
+            self.check_now()
 
     def _handle_tasks(self, tasks: list):
+        sender = self.sender()
+        if self._stopped or (isinstance(sender, _ScanWorker) and sender._root != self._root):
+            return
         self._tasks = tasks
         done, total = today_progress(tasks, datetime.now())
         self.progress_changed.emit(done, total)
@@ -111,5 +130,7 @@ class TaskWatcher(QObject):
         self._stopped = True
         self._timer.stop()
         if self._worker is not None and self._worker.isRunning():
+            if isinstance(self._worker, QThread):
+                self._worker.requestInterruption()
             if not self._worker.wait(self.STOP_WAIT_MS):
                 log.warning("Task scan still running at exit")

@@ -35,7 +35,7 @@ DEFAULTS = {
     "close_to_tray": True,
     "home_view": "grid",
     "pinned_notes": [],
-    "display_name": "سجاد",
+    "display_name": "",
     "theme": "system",
     # Which set of eleven colour tokens the theme picks its half from.
     # See ui.styles.PALETTES; an unknown name falls back to the default.
@@ -68,6 +68,8 @@ DEFAULTS = {
     "day_widget": False,
     # Where the panel was dragged to. Empty means the default corner.
     "day_widget_position": [],
+    "check_app_updates": True,
+    "last_app_update_check": 0,
 }
 
 DIRECTION_MODES = ("rtl", "ltr", "auto")
@@ -139,6 +141,8 @@ def load() -> dict:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
+        return dict(DEFAULTS)
+    if not isinstance(data, dict):
         return dict(DEFAULTS)
     merged = {**DEFAULTS, **data}
     # Pre-2.7.0 stored a single "font_family" that fronted a fixed fallback

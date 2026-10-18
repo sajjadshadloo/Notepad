@@ -27,6 +27,9 @@ def load() -> dict:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
+    if not isinstance(data, dict):
+        return {}
+    data = {key: value for key, value in data.items() if isinstance(value, dict)}
     for entry in data.values():
         if isinstance(entry, dict):
             for field in _RETIRED_FIELDS:

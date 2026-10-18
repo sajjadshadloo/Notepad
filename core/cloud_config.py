@@ -32,6 +32,10 @@ class SyncSettings:
     bot_token: str = ""
     # Written by older installs; the settings screen does not show it.
     proxy: str = ""
+    user_id: str = ""
+    device_id: str = ""
+    confirmed_root: str = ""
+    excluded_paths: tuple[str, ...] = ()
 
 
 def path():
@@ -51,6 +55,11 @@ def load() -> SyncSettings:
         key=_read(raw.get("key")),
         bot_token=_read(raw.get("bot_token")),
         proxy=str(raw.get("proxy", "")),
+        user_id=str(raw.get("user_id", "")),
+        device_id=str(raw.get("device_id", "")),
+        confirmed_root=str(raw.get("confirmed_root", "")),
+        excluded_paths=tuple(v for v in raw.get("excluded_paths", []) if isinstance(v, str))
+            if isinstance(raw.get("excluded_paths", []), list) else (),
     )
 
 
@@ -69,6 +78,10 @@ def save(settings: SyncSettings):
         "url": settings.url.strip(),
         "key": seal(settings.key.strip()),
         "bot_token": seal(settings.bot_token.strip()),
+        "user_id": settings.user_id,
+        "device_id": settings.device_id,
+        "confirmed_root": settings.confirmed_root,
+        "excluded_paths": list(settings.excluded_paths),
     }
     if settings.proxy:
         data["proxy"] = settings.proxy

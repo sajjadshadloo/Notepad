@@ -9,7 +9,6 @@ The folder is the category. Nothing is stored anywhere else: make a folder in
 Explorer and it appears; move a file and it changes category.
 """
 import time
-from datetime import datetime
 
 from PyQt6.QtCore import QPointF, QRectF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QAction, QFontMetricsF, QPainter
@@ -238,11 +237,13 @@ class CardGrid(QWidget):
 
     # Painting
 
-    def paintEvent(self, _event):
+    def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
         for index, (card, rect) in enumerate(zip(self._cards, self._rects)):
+            if not event.rect().intersects(rect.toAlignedRect()):
+                continue
             self._paint_card(p, card, rect, index == self._hover)
         p.end()
 
@@ -369,7 +370,7 @@ class CardList(CardGrid):
             right -= w + 16
         return spans
 
-    def paintEvent(self, _event):
+    def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         whole = QRectF(self.rect())
@@ -385,6 +386,8 @@ class CardList(CardGrid):
         p.drawLine(QPointF(1, head_h), QPointF(whole.width() - 1, head_h))
         title_f, preview_f, cell_f = font(13.5, 600), font(12), font(12.5)
         for index, (card, rect) in enumerate(zip(self._cards, self._rects)):
+            if not event.rect().intersects(rect.toAlignedRect()):
+                continue
             if index == self._hover:
                 clip = rect.adjusted(1, 0, -1, 0)
                 if index == len(self._cards) - 1:
@@ -429,6 +432,7 @@ class NotesBoard(QWidget):
     new_note_requested = pyqtSignal()
     view_changed = pyqtSignal(str)
     pin_toggled = pyqtSignal(str)
+    library_changed = pyqtSignal()
 
     def __init__(self, root: str, parent=None):
         super().__init__(parent)
@@ -440,6 +444,11 @@ class NotesBoard(QWidget):
         self._pinned: set = set()
         self._view = "grid"
         self._open_today = 0
+        self._loader = None
+        self._reload_pending = False
+        self._load_generation = 0
+        self._loading = False
+        self._load_error = ""
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -480,7 +489,12 @@ class NotesBoard(QWidget):
     # Data
 
     def set_root(self, root: str):
+        self._load_generation += 1
+        self._cards = []
         self._root = root
+        self._fill()
+        if self._loader is not None:
+            self._loader.requestInterruption()
         self.reload()
 
     def set_pinned(self, paths):
@@ -492,8 +506,45 @@ class NotesBoard(QWidget):
         self._fill_header()
 
     def reload(self):
-        """Re-read the folder on the UI thread — 2.8 ms for the real folder."""
-        self._show(load_library(self._root))
+        """Never make the window wait for a slow disk or a cloud folder."""
+        from ui.background import ReadWorker, start_background
+
+        if self._loader is not None:
+            self._reload_pending = True
+            return
+        root, generation = self._root, self._load_generation
+        self._loading, self._load_error = True, ""
+        self._fill_header()
+        worker = ReadWorker(lambda cancelled: (generation, load_library(root, cancelled)))
+        self._loader = worker
+        worker.completed.connect(self._loaded)
+        worker.finished.connect(self._load_finished)
+        self.destroyed.connect(worker.cancel)
+        start_background(worker)
+
+    def _loaded(self, result, error):
+        self._loading = False
+        self._load_error = error
+        if error:
+            self._fill_header()
+        elif result[0] == self._load_generation:
+            self._show(result[1])
+            self.library_changed.emit()
+
+    def _load_finished(self):
+        self._loader = None
+        self._loading = False
+        if self._reload_pending:
+            self._reload_pending = False
+            self.reload()
+
+    def stop_loading(self):
+        self._reload_pending = False
+        if self._loader is not None:
+            self._loader.requestInterruption()
+
+    def cards(self) -> list:
+        return list(self._cards)
 
     def _show(self, cards: list):
         self._cards = cards
@@ -529,11 +580,16 @@ class NotesBoard(QWidget):
 
     def _fill_header(self):
         shown = self.shown_cards()
-        hour = datetime.now().hour
-        hello = "صبح بخیر" if hour < 12 else "روز بخیر" if hour < 17 else "عصر بخیر"
+        from core.greeting import greeting as time_greeting
+
+        hello = time_greeting()
         greeting = hello + " · " + to_persian_digits(str(self._open_today)) + " کار برای امروز مانده"
         title = "همه‌ی یادداشت‌ها" if self._category == ALL_LABEL else self._category
         subtitle = to_persian_digits(str(len(shown))) + " یادداشت"
+        if self._loading:
+            subtitle += " · در حال خواندن یادداشت‌ها…"
+        elif self._load_error:
+            subtitle += " · " + self._load_error
         if shown:
             newest = max(shown, key=lambda card: card.modified)
             subtitle += " · آخرین تغییر " + edited_label(newest.modified)

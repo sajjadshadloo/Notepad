@@ -70,6 +70,7 @@ def send_to_recycle_bin(path: str | Path) -> bool:
         return False
 
     if result != 0 or operation.fAnyOperationsAborted:
-        log.warning("SHFileOperationW refused %s (code %s)", target, result)
+        log.warning("SHFileOperationW refused %s (code %s)", target, result,
+                    extra={'event': 'file.recycle.failed', 'reason': f'windows_error_{result}'})
         return False
     return not target.exists()

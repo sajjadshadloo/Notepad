@@ -2,7 +2,7 @@
 ; Build:  ISCC.exe installer.iss   (after PyInstaller has produced dist\NotepadPlus\)
 
 #define MyAppName "Notepad Plus"
-#define MyAppVersion "4.3.0"
+#define MyAppVersion "4.6.0"
 #define MyAppPublisher "Sajjad"
 #define MyAppExeName "NotepadPlus.exe"
 
@@ -11,6 +11,10 @@ AppId={{8E1B7A64-4A0E-4A7B-9E1C-9C21D9F0A7B1}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
+AppPublisherURL=https://github.com/sajjadshadloo/Notepad
+AppSupportURL=https://github.com/sajjadshadloo/Notepad/issues
+AppUpdatesURL=https://github.com/sajjadshadloo/Notepad/releases/latest
+LicenseFile=LICENSE
 DefaultDirName={localappdata}\Programs\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
@@ -24,6 +28,8 @@ WizardStyle=modern
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 ArchitecturesInstallIn64BitMode=x64compatible
+; The editor exits through its normal save prompts. Never force-close it.
+CloseApplications=no
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional shortcuts:"
@@ -68,4 +74,39 @@ Root: HKA; Subkey: "Software\Classes\.md\OpenWithList\{#MyAppExeName}"; ValueTyp
 Filename: "{cmd}"; Parameters: "/C schtasks /Delete /TN ""NotepadPlus"" /F"; Flags: runhidden; RunOnceId: "DelReminderTasks"
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent; Check: not IsAppUpdate
+Filename: "{app}\{#MyAppExeName}"; Flags: nowait; Check: IsAppUpdate
+
+[Code]
+function IsAppUpdate: Boolean;
+begin
+  Result := ExpandConstant('{param:NOTEPADUPDATE|0}') = '1';
+end;
+
+function InitializeSetup: Boolean;
+var
+  Attempts: Integer;
+begin
+  { The updater starts Setup at the very end of shutdown. Wait for the
+    editor's OS-owned mutex to disappear before touching application files. }
+  Attempts := 0;
+  while IsAppUpdate and CheckForMutexes('Local\NotepadPlus.Running') and (Attempts < 300) do
+  begin
+    Sleep(100);
+    Attempts := Attempts + 1;
+  end;
+  Result := not CheckForMutexes('Local\NotepadPlus.Running');
+  if not Result then
+  begin
+    Log('Editor is still running; installation cancelled without replacing files.');
+    if not WizardSilent then
+      MsgBox('Please exit Notepad Plus before installing the update.', mbInformation, MB_OK);
+  end;
+end;
+
+function InitializeUninstall: Boolean;
+begin
+  Result := not CheckForMutexes('Local\NotepadPlus.Running');
+  if not Result and not UninstallSilent then
+    MsgBox('Please exit Notepad Plus before uninstalling.', mbInformation, MB_OK);
+end;

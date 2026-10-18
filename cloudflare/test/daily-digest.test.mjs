@@ -13,9 +13,12 @@ function database() {
     prepare(sql) {
       return {
         async all() { return { results: sqlite.prepare(sql).all() }; },
+        async first() { return sqlite.prepare(sql).get() ?? null; },
         bind(...values) {
           return {
             async run() { return { meta: { changes: sqlite.prepare(sql).run(...values).changes } }; },
+            async first() { return sqlite.prepare(sql).get(...values) ?? null; },
+            async all() { return { results: sqlite.prepare(sql).all(...values) }; },
           };
         },
       };

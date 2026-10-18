@@ -1,51 +1,79 @@
-# Notepad Plus online bridge
+# Notepad Plus shared Telegram bridge
 
-The deployed Worker at `https://notepad-plus-bot.sajadshadlloo23.workers.dev`
-stores private notes in D1. A Telegram message creates a note, editing that
-message edits the same note, and `/app` serves the owner-only Mini App for
-notes, Markdown checkbox tasks and a Persian calendar. The desktop API uses
-version checks and soft deletion. The bot token, webhook secret, owner ID and
-desktop sync key are Cloudflare Secrets, never repository values.
+Worker: `https://notepad-plus-bot.sajadshadlloo23.workers.dev`.
+The 4.4.0 beta supports separate accounts on one Worker/D1.
+See [rollout and verification](../MULTI-USER-IMPLEMENTATION.md).
 
-The Worker sends one daily Telegram digest at 09:00 Asia/Tehran even when the
-computer is off. Its Cron Trigger checks every 15 minutes, but only the 09:00
-hour can send. The digest includes unchecked tasks due today or overdue from
-the shared Markdown notes; completed and undated tasks are omitted. No
-qualifying tasks means no message. The `daily_digest` D1 table claims each day
-before sending to prevent repeat messages. An explicit Telegram rejection can
-retry at the next quarter-hour; an uncertain network result keeps the claim
-to avoid duplicates. The code is in `src/daily-digest.mjs`, the schedule in
-`wrangler.jsonc`, and the migration in `migrations/0002_daily_digest.sql`.
+## Identity and data
 
-The desktop mirror is in `core/cloud_sync.py`. `ui/main_window.py` schedules it
-when the source app runs. On this machine the installed editor is newer than
-the checkout, so the existing `NotepadPlusCloudSync` Windows task runs
-`tools/run_cloud_sync.py` every minute. Configuration and state are in the
-user's Notepad Plus AppData folder. The initial 16 local files were backed up
-before upload to `AppData/Roaming/Sajjad/Notepad Plus/backups/notes-before-cloud-sync-20260924-112535.zip`.
+The API derives an account from verified Telegram initData or a hashed,
+revocable device credential. Caller-supplied account IDs are never authority.
+Notes, conflicts, message links, heartbeat and digest claims are account-scoped.
+Paths are unique per account. Legacy credentials map only to legacy-owner and
+legacy-desktop; they remain valid unless that device is revoked.
 
-Development checks: `npm test` here, `python -m pytest -q tests/test_cloud_sync.py`
-from the repository root. Deploy with `npx wrangler deploy`. To pair a new
-Windows installation, run `python -m tools.setup_cloud_sync` from the root,
-verify the Worker, then enable the generated `cloud_sync.json`. Pairing a
-second computer needs a separate credential design; running setup there would
-rotate the single desktop key used by this installation.
+TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET, TELEGRAM_OWNER_ID and
+DESKTOP_SYNC_KEY remain Cloudflare Secrets. Never ship them in an installer.
+PUBLIC_REGISTRATION, MAX_USERS and MAINTENANCE are non-secret variables.
+The deployed beta caps accounts at 20. Raising capacity needs review.
+Optional TELEGRAM_BOT_USERNAME avoids the first getMe identity lookup.
 
-The Mini App UI lives in `src/miniapp.mjs` (the frame), `public/app.js` and
-`public/app.css`. Wrangler serves the local Vazirmatn font files from
-`public/fonts`. Before deployment, `npx wrangler dev --port 8787` allows a
-mobile-width browser preview. The interface includes note previews, task
-search and filters, daily calendar agenda, light/dark themes, and an unsaved
-changes prompt in both editors.
+Webhook registration must accept `message`, `edited_message`, and
+`callback_query`. The legacy message-only filter blocks pairing confirmation
+even when /start and health checks work. After deployment the administrator
+should inspect `GET /telegram/webhook-settings` using the existing owner key.
+Its guarded POST repairs the filter without dropping queued updates; it refuses
+to overwrite a webhook pointing to another URL. Public device keys cannot use
+these administrator endpoints. See the [2026-10-18 incident](../CONNECTION-INCIDENT-2026-10-18.md).
 
-`/api/sync-status` reads the latest desktop mirror report for the owner; only
-the desktop key can POST a report. `schema.sql` includes the additive
-`desktop_sync_status` table. The Windows scheduled helper writes a local status
-file and sends a heartbeat after each pass. The Mini App shows the last check,
-last completed pass, conflicts and skipped files; an old heartbeat is shown as
-disconnected. An open document in the installed 4.2.3 editor displays a Reload
-prompt after an external edit, or a missing-file prompt after deletion.
+## Pairing
 
-Telegram Mini App identity follows the official `initData` HMAC validation
-scheme. A local mobile-browser smoke run covers the three views and CRUD, but
-the owner's actual Telegram WebView still needs an on-device check.
+The desktop generates independent 256-bit device/poll keys. POST /api/pairings
+receives a device-key hash and poll proof, returning an expiring Telegram link
+and comparison code. Opening the link presents a confirmation button bound to
+that Telegram user. Confirmation atomically creates one device and claims the
+request. POST /api/pairings/:id requires the poll key and returns approval
+metadata, never device credentials. The desktop already holds its device key
+and stores it using Windows DPAPI. A request expires after ten minutes.
+
+GET /api/account identifies the authenticated account/device. GET /api/devices
+lists metadata without hashes; DELETE /api/devices/:id revokes only the caller's
+device. The /devices bot command also supports revocation. File sync requires
+explicit confirmation of the local folder and supports relative exclusions.
+Exclusions do not remove copies already uploaded to the server.
+
+## Database deployment
+
+Fresh database: execute schema.sql once. It includes the original schema and
+migration 0004; do not also execute 0004 on that database.
+Existing production database: migration 0004_accounts.sql has already been
+applied. It retains note IDs/versions, deletion marks, message links and digest
+history. Do not re-run it.
+
+For future migrations: enable maintenance, deploy, confirm API/webhook 503,
+export and verify a private D1 backup, apply the tested migration, compare data
+and integrity, then disable maintenance and deploy. Maintenance also stops the
+scheduled digest. Never roll back a single-owner Worker over multi-user data:
+it does not enforce account boundaries. Prefer a forward fix.
+
+The digest checks every 15 minutes but sends only in Tehran's 09:00 hour.
+Claims are per account/day. Unknown delivery outcomes stay claimed to prevent
+duplicates. At most six messages are attempted each invocation, with unattempted
+accounts before explicit failures. The 20-account beta fits four invocations;
+increasing capacity requires revisiting this batching.
+
+## Development
+
+Run `npm test` and `npx wrangler deploy --dry-run` here.
+From the root, run `python -m pytest -q` and optionally
+`python tools/check_miniapp_scroll.py`.
+
+The browser check needs Python Playwright, installed Edge, and WebKit from
+`python -m playwright install webkit`. These are development dependencies only.
+The check uses the production shell/CSP with fabricated notes and mocked APIs.
+Pass `--url <public /app URL>` to verify deployed assets with fabricated data.
+
+The existing tools/run_cloud_sync.py scheduled helper now honors account
+identity, confirmed folder and exclusions. Public users use in-app pairing.
+Do not run tools/setup_cloud_sync.py for public users: that legacy administrator
+helper rotates the shared owner key.

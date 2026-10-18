@@ -1,0 +1,36 @@
+Notepad Plus 4.6.0 - source availability
+Application source: https://github.com/sajjadshadloo/Notepad/tree/v4.6.0
+Application source archive: https://github.com/sajjadshadloo/Notepad/archive/refs/tags/v4.6.0.zip
+
+Dependency source archives (unmodified upstream versions used for this build):
+
+PyQt6 6.11.0
+https://files.pythonhosted.org/packages/8b/47/b25c13eca5bebc6505394d0223e46d7ebf0c57dcac2ed908d7d19b18ab6b/pyqt6-6.11.0.tar.gz
+SHA-256: 45dd60aa69976de1918b5ced6b4e7b6a25abd2a919ecef5fd5826ecc76718889
+
+PyQt6-sip 13.11.1
+https://files.pythonhosted.org/packages/90/24/a753e1af94b9ae5b2da63d4598457308da3cdbf0838c959381db086ccc86/pyqt6_sip-13.11.1.tar.gz
+SHA-256: 869c5b48afe38e55b1ee0dd72182b0886e968cc509b98023ff50010b013ce1be
+
+pyinstaller 6.21.0
+https://files.pythonhosted.org/packages/d5/4d/ec706c3fcf39e26888c35b39615ff4d5865d184069666c47492cff1fbe50/pyinstaller-6.21.0.tar.gz
+SHA-256: bb9fab705983e393a2d1cac77d6972513057ad800215fd861dc15ff5272e98fd
+
+Qt 6.11.1 (QtCore, QtGui, QtWidgets, QtNetwork, QtSvg and plugins):
+https://download.qt.io/archive/qt/6.11/6.11.1/single/qt-everywhere-src-6.11.1.tar.xz
+https://download.qt.io/archive/qt/6.11/6.11.1/submodules/
+
+Python 3.13.12:
+https://www.python.org/ftp/python/3.13.12/Python-3.13.12.tar.xz
+
+Inter 4.001 font source (font name-table revision):
+https://github.com/rsms/inter/tree/9221beed3
+
+Vazirmatn 33.003 font source:
+https://github.com/rastikerdar/vazirmatn/tree/v33.003
+
+License texts are shipped in the licenses/ directory.
+Qt remains dynamically linked; this onedir build does not seal or statically link the Qt libraries.
+To build the application, use requirements.txt, notepad.spec and installer.iss from the same tag.
+PyQt6-Qt6 runtime used by this release: 6.11.1; PyQt6-sip: 13.11.1.
+No private credentials, notes or production database are necessary to build the desktop application.

@@ -16,7 +16,8 @@ a = Analysis(
     ['main.py'],
     pathex=['.'],
     binaries=[],
-    datas=[('assets', 'assets')],
+    datas=[('assets', 'assets'), ('licenses', 'licenses'), ('LICENSE', '.'),
+           ('THIRD-PARTY-NOTICES.md', '.'), ('DEPENDENCY-SOURCES.txt', '.'), ('PRIVACY.md', '.')],
     hiddenimports=[
         'PyQt6.QtCore',
         'PyQt6.QtGui',

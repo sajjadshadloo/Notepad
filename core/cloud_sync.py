@@ -10,6 +10,8 @@ import hashlib
 import json
 import logging
 import re
+import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.error import HTTPError
@@ -27,6 +29,10 @@ log = logging.getLogger("notepad.cloud_sync")
 class SyncError(Exception):
     # The HTTP status, when the server answered at all.
     status = None
+
+    def __init__(self, message="", *, code="sync_error"):
+        super().__init__(message)
+        self.diagnostic_code = code
 
 
 @dataclass
@@ -123,17 +129,17 @@ def _safe_path(root: Path, rel: str) -> Path:
     if (not rel or "\\" in rel or ":" in rel or "\x00" in rel
             or any(not x or x in (".", "..") or x.startswith(".") for x in parts)
             or Path(rel).suffix.lower() not in (".md", ".txt", ".markdown")):
-        raise SyncError("Unsafe cloud path")
+        raise SyncError("Unsafe cloud path", code="unsafe_path")
     path = root.joinpath(*parts)
     if not path.resolve().is_relative_to(root.resolve()):
-        raise SyncError("Cloud path escapes notes folder")
+        raise SyncError("Cloud path escapes notes folder", code="unsafe_path")
     return path
 
 
 class CloudApi:
     def __init__(self, url: str, key: str, proxy: str = ""):
         if not url.startswith("https://") or not key:
-            raise SyncError("Cloud sync is not configured")
+            raise SyncError("Cloud sync is not configured", code="unconfigured")
         self.url = url.rstrip("/")
         self.key = key
         # Where the Worker is filtered, it is reached through the VPN's local
@@ -143,6 +149,12 @@ class CloudApi:
                       if proxy else urlopen)
 
     def call(self, path: str, method: str = "GET", body: dict | None = None) -> dict:
+        started = time.monotonic()
+        # Paths are templates, never request bodies, URLs, keys or pairing codes.
+        route = re.sub(r'/[0-9a-f-]{36}(?=/|$)', '/{id}', path.split('?', 1)[0])
+        fields = {'route': route, 'method': method, 'request_id': str(uuid.uuid4())}
+        log.debug('Server request started', extra={'event': 'http.started', **fields})
+        http_status = None
         payload = json.dumps(body, ensure_ascii=False).encode("utf-8") if body is not None else None
         request = Request(self.url + "/api" + path, data=payload, method=method,
                           headers={"Authorization": "Bearer " + self.key,
@@ -150,18 +162,28 @@ class CloudApi:
                                    "User-Agent": "Mozilla/5.0 NotepadPlusSync/1"})
         try:
             with self._open(request, timeout=15) as response:
-                return json.load(response)
+                http_status = getattr(response, 'status', 200)
+                result = json.load(response)
+                log.debug('Server request completed', extra={'event': 'http.completed', **fields,
+                    'duration_ms': (time.monotonic() - started) * 1000, 'http_status': http_status})
+                return result
         except HTTPError as exc:
+            log.warning('Server rejected request', extra={'event': 'http.rejected', **fields,
+                'http_status': exc.code, 'duration_ms': (time.monotonic() - started) * 1000})
             if exc.code == 409:
-                raise SyncError("Cloud version conflict") from exc
-            error = SyncError(f"Cloud request failed ({exc.code})")
+                raise SyncError("Cloud version conflict", code="version_conflict") from exc
+            message = {413: "ظرفیت آزمایشی دفترچه یا اندازهٔ متن بیش از حد است؛ فایل محلی محفوظ است.",
+                       429: "درخواست زیاد است؛ همگام‌سازی کمی بعد دوباره انجام می‌شود."}.get(exc.code)
+            error = SyncError(message or f"Cloud request failed ({exc.code})", code="http_error")
             error.status = exc.code
             raise error from exc
         except (OSError, ValueError) as exc:
+            log.warning('Network or response decoding failed', exc_info=True, extra={'event': 'http.failed', **fields,
+                'duration_ms': (time.monotonic() - started) * 1000, 'http_status': http_status})
             # Say which way it failed: a timeout, a refused proxy and a page
             # that is not JSON all need different fixes.
             reason = getattr(exc, "reason", None) or exc
-            raise SyncError(f"Cloud is unavailable ({type(reason).__name__}: {reason})"[:150]) from exc
+            raise SyncError(f"Cloud is unavailable ({type(reason).__name__}: {reason})"[:150], code="network_unavailable") from exc
 
 
 def _journal(path: Path) -> dict:
@@ -173,33 +195,45 @@ def _journal(path: Path) -> dict:
             return data
     except (ValueError, OSError):
         pass
-    raise SyncError("Sync journal is damaged; no files were changed")
+    raise SyncError("Sync journal is damaged; no files were changed", code="journal_damaged")
 
 
 def sync_once(root: Path, journal_file: Path, api: CloudApi,
-              protected: set[str] | None = None) -> SyncResult:
+              protected: set[str] | None = None, excluded_paths: tuple[str, ...] = ()) -> SyncResult:
     journal_file.parent.mkdir(parents=True, exist_ok=True)
     lock = QLockFile(str(journal_file) + ".lock")
     lock.setStaleLockTime(0)
     if not lock.tryLock(0):
         return SyncResult(skipped=1)
     try:
-        return _sync_once(root, journal_file, api, protected)
+        return _sync_once(root, journal_file, api, protected, excluded_paths)
     finally:
         lock.unlock()
 
 
 def _sync_once(root: Path, journal_file: Path, api: CloudApi,
-               protected: set[str] | None = None) -> SyncResult:
+               protected: set[str] | None = None, excluded_paths: tuple[str, ...] = ()) -> SyncResult:
     root = root.resolve()
     root.mkdir(parents=True, exist_ok=True)
     protected = {str(Path(p).resolve()).casefold() for p in (protected or set())}
     journal = _journal(journal_file)
+    account = getattr(api, "account_id", "")
+    if account:
+        if journal.get("account_id") and journal["account_id"] != account:
+            raise SyncError("این پوشه به حساب دیگری متصل است؛ هیچ فایلی تغییر نکرد.", code="account_mismatch")
+        if not journal.get("account_id") and journal.get("items") and account != "legacy-owner":
+            raise SyncError("این پوشه سابقهٔ همگام‌سازی دارد؛ اتصال به حساب تازه نیاز به پوشهٔ جدا دارد.", code="legacy_journal")
+        journal["account_id"] = account
     if journal.get("root") and journal["root"] != str(root):
-        raise SyncError("Notes folder changed; sync needs a new pairing")
+        raise SyncError("Notes folder changed; sync needs a new pairing", code="folder_changed")
     journal["root"] = str(root)
     items = journal["items"]
     result = SyncResult()
+    exclusions = tuple(p.replace("\\", "/").strip("/").casefold() for p in excluded_paths if p.strip("/\\"))
+
+    def excluded(relative):
+        value = relative.replace("\\", "/").casefold()
+        return any(value == p or value.startswith(p + "/") for p in exclusions)
 
     def save():
         write_text_file_atomic(journal_file, json.dumps(journal, ensure_ascii=False, indent=2))
@@ -222,12 +256,15 @@ def _sync_once(root: Path, journal_file: Path, api: CloudApi,
     remote = api.call("/notes")["notes"]
     remote_by_path = {n["path"].casefold(): n for n in remote}
     if len(remote_by_path) != len(remote):
-        raise SyncError("Duplicate cloud paths")
+        raise SyncError("Duplicate cloud paths", code="duplicate_paths")
     for note in remote:
+        if excluded(note["path"]):
+            result.skipped += 1
+            continue
         path = _safe_path(root, note["path"])
         previous = items.get(note["id"])
         if previous and previous["path"] != note["path"]:
-            raise SyncError("Cloud note path changed")
+            raise SyncError("Cloud note path changed", code="remote_path_changed")
         is_protected = str(path.resolve()).casefold() in protected
         existing = path.exists()
         if existing and (path.is_symlink() or not path.is_file()):
@@ -257,7 +294,11 @@ def _sync_once(root: Path, journal_file: Path, api: CloudApi,
             elif previous and unchanged and not is_protected and (remote_changed or existing):
                 if existing:
                     # Deleted in Telegram: recoverable here, like a delete in the app.
-                    if not trash.send_to_recycle_bin(path):
+                    if trash.available():
+                        if not trash.send_to_recycle_bin(path):
+                            result.skipped += 1
+                            continue
+                    else:
                         path.unlink()
                     result.deleted += 1
                 mark(note, None)
@@ -323,6 +364,8 @@ def _sync_once(root: Path, journal_file: Path, api: CloudApi,
                 re.search(r"\.sync-conflict-[0-9a-f]{8}\.", path.name)):
             continue
         rel = path.relative_to(root).as_posix()
+        if excluded(rel) or (account and any(part.startswith(".") for part in path.relative_to(root).parts)):
+            continue
         if rel.casefold() in tracked_paths or rel.casefold() in remote_by_path:
             continue
         if str(path.resolve()).casefold() in protected:

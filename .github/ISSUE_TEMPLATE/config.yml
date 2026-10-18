@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: راهنمای نصب و اتصال تلگرام
+    url: https://github.com/sajjadshadloo/Notepad#readme
+    about: روش نصب، محل فایل‌ها و اتصال را ببین.
+  - name: دریافت آخرین نسخه
+    url: https://github.com/sajjadshadloo/Notepad/releases/latest
+    about: نصاب را از صفحهٔ رسمی نسخه‌ها بگیر.

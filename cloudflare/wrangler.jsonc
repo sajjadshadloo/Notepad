@@ -6,7 +6,9 @@
     "directory": "./public"
   },
   "triggers": {
-    "crons": ["*/15 * * * *"]
+    "crons": [
+      "*/15 * * * *"
+    ]
   },
   "d1_databases": [
     {
@@ -14,5 +16,10 @@
       "database_name": "notepad-plus-data",
       "database_id": "ea1017ba-494b-461c-83e8-d38d56987d2e"
     }
-  ]
+  ],
+  "vars": {
+    "PUBLIC_REGISTRATION": "true",
+    "MAX_USERS": "20",
+    "MAINTENANCE": "false"
+  }
 }

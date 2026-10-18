@@ -1,0 +1,41 @@
+name: گزارش ایراد
+description: مشکل را با مراحل قابل تکرار گزارش کن.
+title: "[ایراد] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        این صفحه عمومی است. متن یادداشت، توکن، کلید، کد اتصال یا لاگ خام را اینجا قرار نده.
+        برای عیب‌یابی از تنظیمات ← گزارش و عیب‌یابی استفاده کن و گزارش را قبل از ارسال مرور کن.
+  - type: input
+    id: version
+    attributes:
+      label: نسخهٔ برنامه
+      placeholder: "مثلاً 4.6.0"
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: ویندوز و دستگاه
+      placeholder: "مثلاً Windows 11، نسخهٔ 64-bit؛ یا مدل گوشی و نسخهٔ تلگرام"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: مراحل تکرار مشکل
+      placeholder: "۱. ...\n۲. ...\n۳. ..."
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: نتیجهٔ فعلی و نتیجهٔ مورد انتظار
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: پیام خطا و گزارش پالایش‌شدهٔ اختیاری
+      description: فقط اطلاعات مرتبط و غیرحساس را وارد کن؛ ZIP پنل عیب‌یابی را بعد از مرور می‌توان پیوست کرد.

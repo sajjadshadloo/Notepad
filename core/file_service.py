@@ -1,9 +1,13 @@
 import codecs
 import os
+import logging
+import uuid
 import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 
 def replace_with_retry(source, target, attempts: int = 6, first_delay: float = 0.05):
@@ -31,6 +35,21 @@ class LoadedFile:
 
 
 def read_text_file(path: str | Path) -> LoadedFile:
+    started = time.monotonic()
+    fields = {'request_id': str(uuid.uuid4()), 'operation': 'file.read'}
+    log.debug('File read started', extra={'event': 'file.read.started', **fields})
+    try:
+        result = _read_text_file(path)
+    except Exception:
+        log.error('File read failed', exc_info=True, extra={'event': 'file.read.failed', **fields,
+            'duration_ms': (time.monotonic() - started) * 1000})
+        raise
+    log.debug('File read completed', extra={'event': 'file.read.completed', **fields,
+        'duration_ms': (time.monotonic() - started) * 1000, 'count': len(result.text)})
+    return result
+
+
+def _read_text_file(path: str | Path) -> LoadedFile:
     raw = Path(path).read_bytes()
 
     if raw.startswith(codecs.BOM_UTF8):
@@ -59,6 +78,20 @@ def _encode_text(text: str, encoding: str) -> bytes:
 
 
 def write_text_file_atomic(path: str | Path, text: str, encoding: str = "utf-8"):
+    started = time.monotonic()
+    fields = {'request_id': str(uuid.uuid4()), 'operation': 'file.write'}
+    log.debug('Atomic file write started', extra={'event': 'file.write.started', **fields})
+    try:
+        _write_text_file_atomic(path, text, encoding)
+    except Exception:
+        log.error('Atomic file write failed', exc_info=True, extra={'event': 'file.write.failed', **fields,
+            'duration_ms': (time.monotonic() - started) * 1000})
+        raise
+    log.debug('Atomic file write completed', extra={'event': 'file.write.completed', **fields,
+        'duration_ms': (time.monotonic() - started) * 1000, 'count': len(text)})
+
+
+def _write_text_file_atomic(path: str | Path, text: str, encoding: str = "utf-8"):
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     payload = _encode_text(text, encoding)

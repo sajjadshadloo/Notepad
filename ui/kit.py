@@ -18,10 +18,14 @@ from PyQt6.QtWidgets import QAbstractButton, QSizePolicy, QWidget
 
 from ui.styles import current_palette
 
-UI_FAMILIES = ["Vazirmatn", "Inter", "Segoe UI", "sans-serif"]
+UI_FAMILIES = ["Vazirmatn"]
 # The design asks for `ui-monospace, Consolas`; on Windows that resolves to
 # Consolas, so Consolas leads.
-MONO_FAMILIES = ["Consolas", "Cascadia Mono", "monospace"]
+MONO_FAMILIES = ["Consolas"]
+# These are concrete primary families (Vazirmatn is bundled). Qt still does
+# per-character fallback for missing glyphs. An explicit multi-family chain
+# made the first Windows font measurement populate the system font database,
+# stalling even a one-character toolbar button on a cold launch.
 
 _WEIGHTS = {
     300: QFont.Weight.Light,

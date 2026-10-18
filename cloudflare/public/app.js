@@ -259,9 +259,11 @@
     let data = {};
     try { data = await response.json(); } catch { /* an empty body */ }
     if (!response.ok) {
-      const error = Error(response.status === 401 ? 'برای ورود، این صفحه را از منوی بات تلگرام باز کن.'
+      const error = Error(response.status === 401 ? 'در بات /start بزن و دفترچه را از همان‌جا باز کن.'
         : response.status === 409 ? (data.error === 'path_exists' ? 'فایلی با این نام هست.'
           : 'این مورد جای دیگری هم تغییر کرده؛ نسخه‌ی تازه آمد.')
+          : response.status === 413 ? 'ظرفیت آزمایشی دفترچه یا اندازهٔ متن بیش از حد است. تغییر ذخیره نشد.'
+          : response.status === 429 ? 'درخواست زیاد است. کمی بعد دوباره امتحان کن.'
           : 'خطا در ارتباط با سرویس');
       error.status = response.status;
       error.code = data.error;
@@ -821,10 +823,6 @@
   }
   function leaveEditor() { S.editor = null; S.sheet = null; render(); }
   function edBack() { if (dirty()) set({ sheet: 'unsaved' }); else leaveEditor(); }
-  function autosize(area) {
-    area.style.height = 'auto';
-    area.style.height = Math.max(520, area.scrollHeight) + 'px';
-  }
   function viewEditor() {
     const ed = S.editor;
     const note = edNote();
@@ -834,9 +832,8 @@
     });
     const area = h('textarea', {
       class: 'ed-text', id: 'edText', value: ed.draft, spellcheck: false, placeholder: 'بنویس…',
-      oninput: event => { ed.draft = event.target.value; autosize(event.target); updateEditor(); },
+      oninput: event => { ed.draft = event.target.value; updateEditor(); },
     });
-    requestAnimationFrame(() => autosize(area));
     return h('div', { class: 'editor', 'data-key': 'editor:' + (ed.id || 'new') },
       h('div', { class: 'ed-head' },
         h('button', { class: 'ed-back', title: 'برگشت', onclick: edBack }, ICON.back()),
@@ -867,7 +864,6 @@
     const caret = at + snippet.length - back;
     area.focus();
     area.setSelectionRange(caret, caret);
-    autosize(area);
     updateEditor();
   }
   function renderEdbar() {
@@ -1224,6 +1220,7 @@
     document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('on', b.dataset.tab === S.tab));
     $('nav').classList.toggle('hidden', Boolean(S.editor));
     $('edbar').classList.toggle('hidden', !S.editor);
+    $('scroll').classList.toggle('editing', Boolean(S.editor));
     $('syncDot').className = 'sync-dot ' + syncSummary().tone;
     if (tg && tg.BackButton && tg.isVersionAtLeast && tg.isVersionAtLeast('6.1')) {
       if (S.editor || S.sheet) tg.BackButton.show(); else tg.BackButton.hide();
@@ -1282,11 +1279,23 @@
     }
   }
   applyTheme();
+  // WebViews may resize only their visual viewport when the keyboard opens.
+  // Keep the editor and its toolbar inside the actually visible height.
+  function fitViewport() {
+    const visible = (window.visualViewport && window.visualViewport.height) || window.innerHeight;
+    const telegram = tg && tg.viewportHeight;
+    const height = telegram > 0 ? Math.min(telegram, visible) : visible;
+    if (height > 0) document.documentElement.style.setProperty('--app-height', height + 'px');
+  }
+  fitViewport();
+  window.addEventListener('resize', fitViewport);
+  if (window.visualViewport) window.visualViewport.addEventListener('resize', fitViewport);
   if (tg) {
     tg.ready();
     tg.expand();
     if (tg.isVersionAtLeast && tg.isVersionAtLeast('7.7') && tg.disableVerticalSwipes) tg.disableVerticalSwipes();
     if (tg.onEvent) tg.onEvent('themeChanged', applyTheme);
+    if (tg.onEvent) tg.onEvent('viewportChanged', fitViewport);
     if (tg.BackButton) tg.BackButton.onClick(() => {
       if (S.sheet) set({ sheet: null });
       else if (S.editor) edBack();

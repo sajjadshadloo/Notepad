@@ -58,6 +58,7 @@ def _setup_logging() -> Path:
     handler.setFormatter(
         logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
     )
+    handler.setLevel(logging.INFO)
     root = logging.getLogger()
     root.addHandler(handler)
     root.setLevel(logging.INFO)
@@ -131,6 +132,12 @@ def _report_startup():
 
 def main() -> int:
     _set_windows_app_id()
+    if sys.platform == "win32":
+        # Qt 6.8+ defaults to DirectWrite. Its first bundled-font lookup in
+        # the frozen application stalled for ~12s on Windows; the supported
+        # GDI backend starts without that font-service wait. Explicit user
+        # platform settings (including offscreen tests) still take precedence.
+        os.environ.setdefault("QT_QPA_PLATFORM", "windows:fontengine=gdi")
     app = QApplication(sys.argv)
     app.setApplicationName("Notepad Plus")
     app.setApplicationDisplayName("Notepad Plus")
@@ -141,6 +148,11 @@ def main() -> int:
     log_file = _setup_logging()
     _install_excepthook(log_file)
     _install_qt_message_log()
+    from core.ui_watchdog import UiWatchdog
+
+    watchdog = UiWatchdog(app)
+    watchdog.start()
+    app.aboutToQuit.connect(watchdog.stop)
     _mark("logging")
 
     # Resolve now: a second instance forwards these paths to the first one,
@@ -157,7 +169,18 @@ def main() -> int:
             "continuing standalone."
         )
     else:
-        guard.listen()
+        # An isolated packaging smoke must not take over the running user's
+        # IPC endpoint. It quits before accepting any external file requests.
+        if "--smoke-test" not in sys.argv:
+            guard.listen()
+
+    # Inno Setup refuses to replace a still-running editor. The OS releases
+    # this mutex only when this process has really ended (not when hidden).
+    running_mutex = None
+    if sys.platform == 'win32' and getattr(sys, 'frozen', False) and '--smoke-test' not in sys.argv:
+        import ctypes
+        ctypes.windll.kernel32.CreateMutexW.restype = ctypes.c_void_p
+        running_mutex = ctypes.windll.kernel32.CreateMutexW(None, False, 'Local\\NotepadPlus.Running')
 
     _mark("single instance")
 
@@ -166,6 +189,9 @@ def main() -> int:
 
     _mark("import ui")
     app.setApplicationVersion(APP_VERSION)
+    from core import diagnostics
+
+    diagnostics.configure(APP_VERSION)
     app.setWindowIcon(app_icon())
     _load_bundled_fonts()
     _mark("fonts")
@@ -205,6 +231,15 @@ def main() -> int:
         QTimer.singleShot(0, app.quit)
     exit_code = app.exec()
     guard.release()
+    if window.updates.pending_install is not None:
+        from core.app_updates import launch_installer
+        try:
+            launch_installer(window.updates.pending_install, window.updates.folder)
+        except Exception:
+            log.exception('Could not start application update installer', extra={'event': 'update.launch_failed'})
+            QMessageBox.warning(None, 'به‌روزرسانی',
+                'نصب نسخهٔ جدید شروع نشد. برنامه را دوباره باز کن و از تنظیمات ← به‌روزرسانی تلاش کن.')
+    diagnostics.shutdown()
     return exit_code
 
 

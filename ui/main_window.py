@@ -102,7 +102,7 @@ log = logging.getLogger(__name__)
 TAB_DOT_SIZE = 6
 
 APP_TITLE = "Notepad Plus"
-APP_VERSION = "4.3.0"
+APP_VERSION = "4.6.0"
 
 # Line endings, as characters rather than an escape.
 NEWLINE_CHARS = chr(13) + chr(10)
@@ -456,6 +456,10 @@ class MainWindow(QMainWindow):
         # on the way in — with this assigned at the end of __init__ instead,
         # launching onto the calendar crashed before the window ever showed.
         self._tasks_watcher: TaskWatcher | None = None
+        self._links_worker = None
+        self._links_pending = False
+        self._links_cached = None
+        self._links_cached_root = ""
         # Tab status dots, keyed by colour; dropped when the palette changes.
         self._dot_icons: dict = {}
         self._zoom_steps = 0
@@ -475,10 +479,16 @@ class MainWindow(QMainWindow):
         self._status_timer = QTimer(self, singleShot=True, interval=0)
         self._status_timer.timeout.connect(self._refresh_status)
 
+        from ui.app_updates import UpdateController
+        self.updates = UpdateController(APP_VERSION, self._cfg, self)
+        self.updates.available.connect(self._app_update_available)
+        self.updates.install_requested.connect(self._install_app_update)
+
         self.setWindowTitle(APP_TITLE)
         self.setWindowIcon(_app_icon())
-        self.setMinimumSize(1180, 680)
-        self.resize(1360, 820)
+        available = self.screen().availableGeometry()
+        self.setMinimumSize(min(1000, available.width()), min(600, max(400, available.height() - 40)))
+        self.resize(min(1360, available.width()), min(820, max(400, available.height() - 40)))
         self.setAcceptDrops(True)
 
         self._build_actions()
@@ -669,6 +679,7 @@ class MainWindow(QMainWindow):
             "&Keyboard Shortcuts", self.show_shortcuts, "Ctrl+/"
         )
         self.about_action = self._action("&About " + APP_TITLE, self.show_about)
+        self.update_action = self._action("بررسی به‌روزرسانی…", lambda: self.show_settings('updates'))
 
         # Encoding
         self.encoding_group = QActionGroup(self)
@@ -808,6 +819,7 @@ class MainWindow(QMainWindow):
 
         help_menu = self.menuBar().addMenu("&Help")
         help_menu.addAction(self.shortcuts_action)
+        help_menu.addAction(self.update_action)
         help_menu.addAction(self.about_action)
 
     def _build_format_bar(self):
@@ -865,6 +877,7 @@ class MainWindow(QMainWindow):
         self.rail.added_elsewhere.connect(self.flash)
 
         self.folder_sidebar = FolderSidebar(self._cfg["notes_root"])
+        self.notes_board.library_changed.connect(self._library_changed)
         self.folder_sidebar.category_selected.connect(self._show_folder)
         self.folder_sidebar.tasks_requested.connect(self.open_tasks_file)
         self.folder_sidebar.index_requested.connect(
@@ -1286,20 +1299,27 @@ class MainWindow(QMainWindow):
 
     def show_today(self):
         """Ctrl+T — the dated to-do items from every note, in one place."""
-        dialog = TodayDialog(self._cfg["notes_root"], self)
+        self._start_task_watcher()
+        watcher = self._tasks_watcher
+        dialog = TodayDialog(self._cfg["notes_root"], self, task_source=watcher.all_tasks)
+        watcher.scanned.connect(dialog.reload)
+        watcher.check_now()
         dialog.task_chosen.connect(self._open_task)
         dialog.snooze_requested.connect(self._snooze_task)
-        dialog.exec()
+        try:
+            dialog.exec()
+        finally:
+            dialog.deleteLater()
 
     def show_quick_open(self):
         """Ctrl+K / Ctrl+P — notes, open tasks and commands in one list."""
-        from core.note_library import display_name, load_library
+        from core.note_library import display_name
         from core.when import day_label
         from ui.today_rail import task_source
 
         notes = [
             {"label": card.title, "sub": display_name(card.folder), "path": card.path}
-            for card in load_library(self._cfg["notes_root"])
+            for card in self.notes_board.cards()
         ]
         tasks = []
         if self._tasks_watcher is not None:
@@ -1318,7 +1338,7 @@ class MainWindow(QMainWindow):
             {"label": "تنظیمات", "kbd": "Ctrl ,", "run": self.show_settings},
             {"label": "فهرست میان‌برها", "kbd": "Ctrl /", "run": self.show_shortcuts},
             {"label": "ضبط سریع", "kbd": "Alt N", "run": self.show_quick_capture},
-            {"label": "مرور صبحگاهی", "kbd": "", "run": self.show_review},
+            {"label": "مرور روز", "kbd": "", "run": self.show_review},
             {"label": "حالت تمرکز", "kbd": "F11", "run": lambda: self.set_focus_mode(True)},
         ]
         extra = [{"label": label, "kbd": keys.replace("+", " "), "run": run}
@@ -1355,7 +1375,7 @@ class MainWindow(QMainWindow):
         self.quick_capture.task_submitted.connect(self._capture_task)
         self.quick_capture.note_submitted.connect(self._save_quick_note)
 
-        self.review = MorningReview(self, self._cfg.get("display_name", "سجاد"))
+        self.review = MorningReview(self, self._cfg.get("display_name", ""))
         self.review.reschedule.connect(self._review_reschedule)
         self.review.mark_done.connect(lambda path, line: (self.set_task_done(path, line, True),
                                                          self._refill_review()))
@@ -1486,7 +1506,13 @@ class MainWindow(QMainWindow):
     def _maybe_morning_review(self):
         """Once a day, the first time the window is on screen with the tasks read."""
         today = date.today().isoformat()
-        if self._cfg.get("review_date") == today or not self.isVisible():
+        if self._closing_application or self._cfg.get("review_date") == today or not self.isVisible() or self.isMinimized():
+            return
+        if QApplication.activeModalWidget() is not None or any(overlay.isVisible() for overlay in
+                (self.settings_overlay, self.palette_overlay, self.quick_capture, self.review)):
+            # Never cover a pairing code, an unsaved-change prompt or a field
+            # the user is typing into with a second blocking overlay.
+            QTimer.singleShot(15_000, self._maybe_morning_review)
             return
         self._cfg["review_date"] = today
         settings_manager.save(self._cfg)
@@ -1528,43 +1554,60 @@ class MainWindow(QMainWindow):
     def _links_index(self):
         from core.links import NoteIndex
 
-        return NoteIndex(self._cfg["notes_root"])
+        root = self._cfg["notes_root"]
+        if self._links_cached_root != root or self._links_cached is None:
+            self.refresh_links_panel(force=True)
+            return NoteIndex(root, paths=[])
+        return self._links_cached
 
-    def refresh_links_panel(self):
+    def refresh_links_panel(self, force=False):
         """Stats, outgoing links and backlinks for the current note."""
-        if not hasattr(self, "links_panel") or not self.links_panel.isVisible():
+        if not hasattr(self, "links_panel") or (not force and not self.links_panel.isVisible()):
             return
-        from core.links import backlinks, links_in
-        from core.note_library import display_name
+        from core.links import link_details
+        from ui.background import ReadWorker, start_background
 
         tab = self.current_document()
         if tab is None:
             self.links_panel.show_links(0, [], [])
             return
-        index = self._links_index()
-        text = tab.text
-        open_tasks = sum(1 for t in parse_document(text) if not t.done)
-        outgoing, seen = [], set()
-        root = Path(self._cfg["notes_root"])
-        for link in links_in(text):
-            if link.target.casefold() in seen:
-                continue
-            seen.add(link.target.casefold())
-            target = index.resolve(link.target)
-            if target is None:
-                outgoing.append({"title": link.label, "sub": "هنوز ساخته نشده",
-                                 "broken": True, "path": ""})
-            else:
-                try:
-                    folder = target.resolve().relative_to(root.resolve()).parts[:-1]
-                except ValueError:
-                    folder = ()
-                outgoing.append({"title": link.label,
-                                 "sub": display_name(folder[0] if folder else ""),
-                                 "broken": False, "path": str(target)})
-        incoming = backlinks(index, Path(tab.path)) if tab.path else []
+        if self._closing_application:
+            return
+        if self._links_worker is not None:
+            self._links_pending = True
+            return
+        root, path, text = self._cfg["notes_root"], tab.path, tab.text
+        identity = (root, tab.recovery_id, tab.editor.document().revision())
+        worker = ReadWorker(lambda cancelled: (identity, link_details(root, path, text, cancelled)))
+        self._links_worker = worker
+        worker.completed.connect(self._links_loaded)
+        worker.finished.connect(self._links_finished)
+        self.destroyed.connect(worker.cancel)
+        start_background(worker)
+
+    def _links_loaded(self, result, error):
+        if error or self._closing_application:
+            return
+        identity, details = result
+        tab = self.current_document()
+        if not tab or identity != (self._cfg["notes_root"], tab.recovery_id, tab.editor.document().revision()):
+            self._links_pending = True
+            return
+        index, open_tasks, outgoing, incoming = details
+        self._links_cached_root, self._links_cached = identity[0], index
         self.links_panel.show_links(open_tasks, outgoing, incoming)
         tab.editor.set_link_resolver(lambda target: index.resolve(target) is not None)
+
+    def _links_finished(self):
+        self._links_worker = None
+        if self._links_pending:
+            self._links_pending = False
+            self.refresh_links_panel()
+
+    def _library_changed(self):
+        self.folder_sidebar.set_categories(self.notes_board.category_names(), self.notes_board.category_counts())
+        self._links_cached = None
+        self._links_timer.start()
 
     def _create_linked_note(self, title: str):
         """A broken link's «ساختن»: the note, next to the one linking to it."""
@@ -1580,6 +1623,10 @@ class MainWindow(QMainWindow):
 
     def open_link_target(self, target: str):
         """Clicking «[[…]]» in the text: open that note, or make it."""
+        if self._links_cached is None or self._links_cached_root != self._cfg["notes_root"]:
+            self.refresh_links_panel(force=True)
+            self.flash("فهرست پیوندها در حال آماده‌شدن است؛ چند لحظه بعد دوباره بزن.")
+            return
         found = self._links_index().resolve(target)
         if found is not None:
             self.open_note_from_board(str(found))
@@ -2301,6 +2348,9 @@ class MainWindow(QMainWindow):
             return None
 
     def _sync_tick(self):
+        if not cloud_config.load().enabled:
+            self.top_bar.set_sync("همگام‌سازی خاموش", "off")
+            return
         checked = self._read_sync_status()
         if checked is None or (datetime.now().astimezone() - checked).total_seconds() > 90:
             self.sync_now()
@@ -2310,18 +2360,25 @@ class MainWindow(QMainWindow):
             return
         settings = cloud_config.load()
         if not settings.enabled:
+            log.debug('Sync is disabled', extra={'event': 'sync.skipped', 'reason': 'disabled'})
             self.top_bar.set_sync("همگام‌سازی خاموش", "off")
             return
         if not (settings.url and settings.key):
+            log.warning('Sync requires a service and readable credential', extra={'event': 'sync.skipped', 'reason': 'unconfigured'})
             self.top_bar.set_sync("همگام · تنظیم نشده", "off",
                                   "آدرس سرور و کلید را در تنظیمات ← همگام‌سازی بگذار.")
+            return
+        if settings.device_id and str(Path(self._cfg["notes_root"]).resolve()) != settings.confirmed_root:
+            log.warning('Sync folder needs confirmation', extra={'event': 'sync.skipped', 'reason': 'folder_unconfirmed'})
+            self.top_bar.set_sync("همگام · تأیید پوشه", "off",
+                                  "پوشهٔ یادداشت‌ها تغییر کرده است؛ در تنظیمات، اتصال این پوشه را دوباره تأیید کن.")
             return
         try:
             protected = {tab.path for index in range(self.tabs.count())
                          if (tab := self.tabs.widget(index)).path and tab.modified}
             self._sync_worker = CloudSyncWorker(
                 self._cfg["notes_root"], settings_manager.app_data_dir() / "cloud_sync_state.json",
-                settings.url, settings.key, protected, self, settings.proxy)
+                settings.url, settings.key, protected, self, settings.proxy, settings.user_id, settings.excluded_paths)
             worker = self._sync_worker
             worker.completed.connect(self._sync_finished)
             worker.finished.connect(worker.deleteLater)
@@ -2336,6 +2393,7 @@ class MainWindow(QMainWindow):
             return
         self._read_sync_status()
         if error:
+            self.top_bar.set_sync("خطای همگام‌سازی", "error", error + "\nبرای تلاش دوباره کلیک کن.")
             self.statusBar().showMessage(f"همگام‌سازی انجام نشد: {error}", 10000)
             return
         if result.downloaded or result.uploaded or result.deleted:
@@ -2357,7 +2415,12 @@ class MainWindow(QMainWindow):
         scan, which on a cold first launch was still walking the folder.
         """
         self._closing_application = True
+        self.updates.stop()
         self._sync_timer.stop()
+        self.notes_board.stop_loading()
+        self._links_timer.stop()
+        if self._links_worker is not None:
+            self._links_worker.requestInterruption()
         self.settings_overlay.wait_for_test()
         if self._tasks_watcher is not None:
             self._tasks_watcher.stop()
@@ -2414,6 +2477,22 @@ class MainWindow(QMainWindow):
 
     def show_shortcuts(self):
         self.show_settings("keys")
+
+    def _app_update_available(self, version):
+        self.update_action.setText('نسخهٔ ' + to_persian_digits(version) + ' آماده است…')
+        self.flash('نسخهٔ جدید آماده است؛ تنظیمات ← به‌روزرسانی را باز کن.')
+
+    def _install_app_update(self, update):
+        if self._sync_worker is not None and self._sync_worker.isRunning():
+            self.updates.message = 'همگام‌سازی در حال اجراست؛ پس از پایان آن، نصب را دوباره بزن.'
+            return
+        # Installation is deferred until main() has left the event loop.
+        # An unsaved-document Cancel therefore cannot start the installer.
+        self.updates.pending_install = update
+        self.quit_application()
+        if not self._closing_application:
+            self.updates.pending_install = None
+            self.updates.message = 'خروج لغو شد؛ نسخهٔ دریافت‌شده برای نصب بعدی آماده است.'
 
     def show_about(self):
         QMessageBox.about(
@@ -2551,6 +2630,8 @@ class MainWindow(QMainWindow):
         # Deferred by one event-loop turn so the window is painted and has
         # focus before anything modal appears on top of it.
         QTimer.singleShot(0, self._run_startup_prompts)
+        if getattr(self, "_review_checked", False):
+            QTimer.singleShot(300, self._maybe_morning_review)
 
     def _run_startup_prompts(self):
         # Guarded here rather than in showEvent: showing the window again
@@ -3109,16 +3190,19 @@ class MainWindow(QMainWindow):
             return
 
         tab = self._tab_for_path(path)
+        self._file_monitor.unwatch(path)
+
+        removed = trash.send_to_recycle_bin(path) if recoverable else self._unlink(path)
+        if not removed:
+            if tab is not None:
+                self._file_monitor.watch(path)
+            QMessageBox.critical(self, "حذف نشد", "این یادداشت حذف نشد.")
+            return
         if tab is not None:
             index = self.tabs.indexOf(tab)
             if index >= 0:
                 tab.mark_clean()
                 self.close_tab(index)
-        self._file_monitor.unwatch(path)
-
-        if not (trash.send_to_recycle_bin(path) or self._unlink(path)):
-            QMessageBox.critical(self, "حذف نشد", "این یادداشت حذف نشد.")
-            return
         self.notes_board.reload()
         self._notify_tasks_changed()
         self.statusBar().showMessage("یادداشت حذف شد", 2500)

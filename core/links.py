@@ -46,13 +46,15 @@ def _key(text: str) -> str:
 class NoteIndex:
     """Every note under a folder, findable by name or by relative path."""
 
-    def __init__(self, root: str | Path):
+    def __init__(self, root: str | Path, paths=None, cancelled=lambda: False):
         self.root = Path(root)
         self.paths: list[Path] = []
         self._by_name: dict[str, Path] = {}
         self._by_rel: dict[str, Path] = {}
-        if self.root.exists():
-            for path in sorted(self.root.rglob("*")):
+        if paths is not None or self.root.exists():
+            for path in sorted(paths if paths is not None else self.root.rglob("*")):
+                if cancelled():
+                    break
                 if path.is_file() and path.suffix.lower() in NOTE_EXTENSIONS:
                     self.paths.append(path)
                     rel = path.relative_to(self.root).as_posix()
@@ -93,11 +95,13 @@ def note_title(text: str, path: Path) -> str:
     return path.stem
 
 
-def backlinks(index: NoteIndex, target: Path, limit: int = 20) -> list[Backlink]:
+def backlinks(index: NoteIndex, target: Path, limit: int = 20, cancelled=lambda: False) -> list[Backlink]:
     """Notes that link to `target`, each with the line the link sits in."""
     target = Path(target).resolve()
     found: list[Backlink] = []
     for path in index.paths:
+        if cancelled():
+            break
         if path.resolve() == target:
             continue
         try:
@@ -119,3 +123,28 @@ def backlinks(index: NoteIndex, target: Path, limit: int = 20) -> list[Backlink]
         if len(found) >= limit:
             break
     return found
+
+
+def link_details(root: str, path: str | None, text: str, cancelled=lambda: False):
+    """Read the links panel's disk data on a worker, never during typing."""
+    from core.note_library import display_name
+    from core.tasks import parse_document
+
+    index = NoteIndex(root, cancelled=cancelled)
+    open_tasks = sum(1 for task in parse_document(text) if not task.done)
+    outgoing, seen = [], set()
+    for link in links_in(text):
+        if cancelled():
+            break
+        if link.target.casefold() in seen:
+            continue
+        seen.add(link.target.casefold())
+        target = index.resolve(link.target)
+        if target is None:
+            outgoing.append({"title": link.label, "sub": "هنوز ساخته نشده", "broken": True, "path": ""})
+        else:
+            folder = target.relative_to(index.root).parts[:-1]
+            outgoing.append({"title": link.label, "sub": display_name(folder[0] if folder else ""),
+                             "broken": False, "path": str(target)})
+    incoming = backlinks(index, Path(path), cancelled=cancelled) if path and not cancelled() else []
+    return index, open_tasks, outgoing, incoming

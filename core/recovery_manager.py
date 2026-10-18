@@ -68,7 +68,11 @@ def load_recoveries() -> list[dict]:
     recovered = []
     for path in recovery_dir().glob("*.json"):
         try:
-            recovered.append(json.loads(path.read_text(encoding="utf-8")))
+            item = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(item, dict) and isinstance(item.get("text"), str):
+                recovered.append(item)
+            else:
+                log.warning("Invalid recovery record preserved: %s", path.name)
         except (OSError, json.JSONDecodeError):
             try:
                 path.unlink()

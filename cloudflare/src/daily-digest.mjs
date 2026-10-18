@@ -108,50 +108,77 @@ export function dailyDigestText(summary) {
   return lines.join('\n');
 }
 
-export async function runDailyDigest(env, now = new Date(), send = fetch) {
+export async function runDailyDigest(env, now = new Date(), send = fetch, userId = 'legacy-owner', chatId = env.TELEGRAM_OWNER_ID, suppliedNotes = null) {
   const clock = dailyDigestClock(now);
   if (clock.hour !== 9) return { kind: 'outside-hour' };
-  if (!env.DB || !env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_OWNER_ID) {
+  if (!env.DB || !env.TELEGRAM_BOT_TOKEN || !chatId) {
     throw new Error('Daily digest is not configured');
   }
-  const notes = (await env.DB.prepare('SELECT text, deleted FROM notes').all()).results;
+  const notes = suppliedNotes || (await env.DB.prepare('SELECT text, deleted FROM notes WHERE user_id = ?').bind(userId).all()).results;
   const message = dailyDigestText(collectDailyTasks(notes, now));
   if (!message) return { kind: 'empty' };
-  const claimed = await env.DB.prepare(`INSERT INTO daily_digest (day, state, claimed_at)
-    VALUES (?, 'pending', ?) ON CONFLICT(day) DO UPDATE SET
+  const claimed = await env.DB.prepare(`INSERT INTO daily_digest (user_id, day, state, claimed_at)
+    VALUES (?, ?, 'pending', ?) ON CONFLICT(user_id, day) DO UPDATE SET
     state = 'pending', claimed_at = excluded.claimed_at, error = ''
-    WHERE daily_digest.state = 'failed'`).bind(clock.day, now.getTime()).run();
+    WHERE daily_digest.state = 'failed'`).bind(userId, clock.day, now.getTime()).run();
   if (claimed.meta.changes !== 1) return { kind: 'already-claimed' };
 
   let response;
   try {
     response = await send(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: Number(env.TELEGRAM_OWNER_ID), text: message }),
+      body: JSON.stringify({ chat_id: Number(chatId), text: message }),
     });
   } catch (error) {
     // A timeout may follow successful delivery. Keep the claim to prevent duplicates.
-    await env.DB.prepare('UPDATE daily_digest SET error = ? WHERE day = ?')
-      .bind('Telegram response unknown', clock.day).run();
+    await env.DB.prepare('UPDATE daily_digest SET error = ? WHERE user_id = ? AND day = ?')
+      .bind('Telegram response unknown', userId, clock.day).run();
     throw error;
   }
   let result;
   try { result = await response.json(); } catch {
-    await env.DB.prepare('UPDATE daily_digest SET error = ? WHERE day = ?')
-      .bind('Telegram response unreadable', clock.day).run();
+    await env.DB.prepare('UPDATE daily_digest SET error = ? WHERE user_id = ? AND day = ?')
+      .bind('Telegram response unreadable', userId, clock.day).run();
     throw new Error('Telegram daily digest response is unreadable');
   }
   if (!response.ok || result.ok === false) {
-    await env.DB.prepare("UPDATE daily_digest SET state = 'failed', error = ? WHERE day = ?")
-      .bind(`Telegram rejected request (${response.status})`, clock.day).run();
+    await env.DB.prepare("UPDATE daily_digest SET state = 'failed', error = ? WHERE user_id = ? AND day = ?")
+      .bind(`Telegram rejected request (${response.status})`, userId, clock.day).run();
     throw new Error(`Telegram rejected daily digest (${response.status})`);
   }
   if (result.ok !== true || !result.result?.message_id) {
-    await env.DB.prepare('UPDATE daily_digest SET error = ? WHERE day = ?')
-      .bind('Telegram response incomplete', clock.day).run();
+    await env.DB.prepare('UPDATE daily_digest SET error = ? WHERE user_id = ? AND day = ?')
+      .bind('Telegram response incomplete', userId, clock.day).run();
     throw new Error('Telegram daily digest response is incomplete');
   }
-  await env.DB.prepare("UPDATE daily_digest SET state = 'sent', sent_at = ?, message_id = ? WHERE day = ?")
-    .bind(Date.now(), result.result.message_id, clock.day).run();
+  await env.DB.prepare("UPDATE daily_digest SET state = 'sent', sent_at = ?, message_id = ? WHERE user_id = ? AND day = ?")
+    .bind(Date.now(), result.result.message_id, userId, clock.day).run();
   return { kind: 'sent', day: clock.day };
+}
+
+// Bound each invocation; later quarter-hours pick up remaining unsent accounts.
+// Grouping happens inside the Worker, never in a user's API response.
+export async function runAllDailyDigests(env, now = new Date(), send = fetch) {
+  const clock = dailyDigestClock(now);
+  if (clock.hour !== 9) return { kind: 'outside-hour' };
+  if (env.TELEGRAM_OWNER_ID) {
+    const { accountForTelegram } = await import('./accounts.mjs');
+    await accountForTelegram(env, String(env.TELEGRAM_OWNER_ID));
+  }
+  const accounts = (await env.DB.prepare(`SELECT a.id, a.telegram_id
+    FROM accounts a LEFT JOIN daily_digest d ON d.user_id = a.id AND d.day = ?
+    WHERE a.disabled = 0 AND a.telegram_id IS NOT NULL
+      AND (d.state IS NULL OR d.state = 'failed')
+    ORDER BY (d.state IS NOT NULL), a.id LIMIT 20`)
+    .bind(clock.day).all()).results;
+  const results = [];
+  for (const account of accounts) {
+    const notes = (await env.DB.prepare('SELECT text, deleted FROM notes WHERE user_id = ? AND deleted = 0')
+      .bind(account.id).all()).results;
+    if (!dailyDigestText(collectDailyTasks(notes, now))) continue;
+    try { results.push(await runDailyDigest(env, now, send, account.id, account.telegram_id, notes)); }
+    catch { results.push({ kind: 'delivery-error' }); }
+    if (results.length >= 6) break;
+  }
+  return { kind: 'processed', results };
 }

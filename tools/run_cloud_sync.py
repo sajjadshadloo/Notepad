@@ -30,8 +30,13 @@ def main():
     settings = load()
     root = Path(settings.get("notes_root") or resolve_save_dir(settings))
     api = CloudApi(config.url, config.key, config.proxy)
+    api.account_id = config.user_id
     try:
-        result = sync_once(root, data / "cloud_sync_state.json", api)
+        if config.device_id and str(root.resolve()) != config.confirmed_root:
+            raise RuntimeError('پوشهٔ همگام‌سازی باید دوباره تأیید شود.')
+        if config.user_id and api.call('/account').get('user_id') != config.user_id:
+            raise RuntimeError('حساب سرور با این پوشه هم‌خوان نیست.')
+        result = sync_once(root, data / "cloud_sync_state.json", api, excluded_paths=config.excluded_paths)
         record_sync_status(data / "cloud_sync_status.json", api, result)
         logger.info("downloaded=%s uploaded=%s deleted=%s conflicts=%s skipped=%s",
                     result.downloaded, result.uploaded, result.deleted,

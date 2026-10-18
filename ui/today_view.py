@@ -43,13 +43,14 @@ class TodayDialog(QDialog):
     # open with unsaved edits, and writing underneath it would lose them.
     snooze_requested = pyqtSignal(str, int, int)
 
-    def __init__(self, root: str, parent=None):
+    def __init__(self, root: str, parent=None, task_source=None):
         super().__init__(parent)
         self.setWindowTitle("کارهای من")
         self.setModal(True)
         self.setMinimumSize(980, 620)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self._root = root
+        self._task_source = task_source
         self._tasks: list[Task] = []
         self._selected: Task | None = None
 
@@ -169,7 +170,7 @@ class TodayDialog(QDialog):
 
     def reload(self):
         now = datetime.now()
-        self._tasks = sort_for_today(scan_folder(self._root), now)
+        self._tasks = sort_for_today(self._task_source() if self._task_source else scan_folder(self._root), now)
         self._fill_list(now)
         self._fill_summary(now)
         self._set_detail(None)
