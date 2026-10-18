@@ -1,0 +1,4 @@
+# Preserve third-party license texts verbatim, including upstream whitespace.
+LICENSE -whitespace
+licenses/** -whitespace
+cloudflare/public/fonts/OFL-*.txt -whitespace

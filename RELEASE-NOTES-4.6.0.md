@@ -26,5 +26,3 @@
 سرویس مشترک تلگرام فعلاً سقف ۲۰ حساب دارد. قبل از اتصال، پوشه و استثناها را بررسی کن؛ `Private` در اتصال جدید مستثنا است. دادهٔ آنلاین رمزگذاری سرتاسری ندارد و رابط حذف کامل حساب هنوز فراهم نیست. نصاب امضای دیجیتال ناشر ندارد؛ فقط از همین مخزن رسمی دریافت کن.
 
 [حریم خصوصی](https://github.com/sajjadshadloo/Notepad/blob/master/PRIVACY.md) · [گزارش ایراد](https://github.com/sajjadshadloo/Notepad/issues/new/choose) · [مجوز GPLv3](https://github.com/sajjadshadloo/Notepad/blob/master/LICENSE) · [سورس و مجوز اجزای همراه](https://github.com/sajjadshadloo/Notepad/blob/master/DEPENDENCY-SOURCES.txt)
-
-این نسخه در کانال اصلی GitHub منتشر می‌شود تا updater آن را ببیند؛ عنوان «آزمایشی عمومی» حدود اعتبارسنجی سرویس و دستگاه‌ها را بیان می‌کند.
