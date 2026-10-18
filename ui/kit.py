@@ -420,3 +420,29 @@ class Clickable(QWidget):
         ):
             self.clicked.emit()
         super().mouseReleaseEvent(event)
+
+
+# Settings panels share one button size and one spacing rhythm.
+SETTINGS_BUTTON_HEIGHT = 36
+SETTINGS_ROW_GAP = 8
+SETTINGS_SECTION_GAP = 16
+
+
+def settings_button(text: str, action=None, *, primary: bool = False, expanding: bool = False) -> Button:
+    """The only button style for settings: same height, radius and padding everywhere.
+
+    `expanding` lets buttons in a row share its width evenly, whatever their labels.
+    """
+    if primary:
+        normal, hover = {"bg": "accent", "fg": "on_accent", "border": None}, {"bg": "accent_hover"}
+    else:
+        normal, hover = {"bg": "surface_alt", "fg": "text", "border": "border"}, {"border": "accent"}
+    button = Button(text, None, height=SETTINGS_BUTTON_HEIGHT, radius=8, padding=(14, 14), px=12.5,
+                    weight=600 if primary else 400, normal=normal, hover=hover)
+    if expanding:
+        button.setMinimumWidth(0)
+        button.setMaximumWidth(16777215)
+        button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+    if action is not None:
+        button.clicked.connect(action)
+    return button

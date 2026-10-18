@@ -11,7 +11,7 @@ from core import app_updates as updates, settings_manager
 from core.jalali import to_persian_digits
 from ui.background import start_background
 from ui.cloud_sync_worker import OpenLinkWorker
-from ui.kit import Button, current_palette, font
+from ui.kit import Button, current_palette, font, settings_button
 
 log = logging.getLogger(__name__)
 
@@ -221,11 +221,7 @@ class UpdatesPanel(QWidget):
         self.refresh()
 
     def _button(self, text, callback, primary=False):
-        button = Button(text, None, height=34, radius=7, padding=(10, 10), px=11.5,
-            normal={'bg': 'accent' if primary else 'surface_alt', 'fg': 'on_accent' if primary else 'text'},
-            hover={'bg': 'accent_hover' if primary else 'divider'})
-        button.clicked.connect(callback)
-        return button
+        return settings_button(text, callback, primary=primary, expanding=True)
 
     def refresh(self):
         c = self.controller

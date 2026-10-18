@@ -11,7 +11,7 @@ from core import diagnostics, settings_manager
 from core.jalali import to_persian_digits
 from ui.background import ReadWorker, start_background
 from ui.cloud_sync_worker import OpenLinkWorker
-from ui.kit import Button, current_palette, font
+from ui.kit import Button, current_palette, font, settings_button
 
 LEVELS = {'DEBUG': 'جزئیات', 'INFO': 'اطلاعات', 'WARNING': 'هشدار', 'ERROR': 'خطا', 'CRITICAL': 'بحرانی'}
 TITLES = {'session.start': 'برنامه شروع شد', 'session.end': 'برنامه بسته شد',
@@ -121,13 +121,11 @@ class DiagnosticsPanel(QWidget):
         # takes an equal share of the row instead of its label's width.
         actions = QHBoxLayout()
         actions.setSpacing(8)
-        self.export_button = self._button('گرفتن گزارش پشتیبانی', self._choose_export, primary=True)
-        self.copy_button = self._button('کپی رویداد', self._copy)
+        self.export_button = self._button('گرفتن گزارش پشتیبانی', self._choose_export, primary=True, expanding=True)
+        self.copy_button = self._button('کپی رویداد', self._copy, expanding=True)
         self.copy_button.setEnabled(False)
-        folder_button = self._button('پوشهٔ گزارش‌ها', self._open_folder)
+        folder_button = self._button('پوشهٔ گزارش‌ها', self._open_folder, expanding=True)
         for button in (self.export_button, self.copy_button, folder_button):
-            button.setMinimumWidth(0)
-            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             actions.addWidget(button, 1)
         layout.addLayout(actions)
         verbose = QHBoxLayout()
@@ -163,12 +161,8 @@ class DiagnosticsPanel(QWidget):
         self._timer.start()
         self.refresh()
 
-    def _button(self, label, slot, primary=False):
-        button = Button(label, None, height=32, radius=7, padding=(10, 10), px=11.5,
-            normal={'bg': 'accent' if primary else 'surface_alt', 'fg': 'on_accent' if primary else 'text'},
-            hover={'bg': 'accent_hover' if primary else 'divider'})
-        button.clicked.connect(slot)
-        return button
+    def _button(self, label, slot, primary=False, expanding=False):
+        return settings_button(label, slot, primary=primary, expanding=expanding)
 
     def refresh(self):
         self._update_verbose_state()

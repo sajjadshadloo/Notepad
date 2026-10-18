@@ -30,6 +30,7 @@ from core.jalali import MONTHS, from_gregorian, to_persian_digits
 from core.when import day_label, parse_preview, parse_when, weekday_name
 from ui.kit import (
     Button,
+    settings_button,
     Clickable,
     col,
     draw_checkbox,
@@ -969,10 +970,7 @@ class SettingsPanel(Overlay):
 
     def _build_general(self, column):
         s = self._state
-        change = Button("تغییر", None, height=32, radius=8, padding=(14, 14), px=12.5,
-                        normal={"bg": "surface_alt", "fg": "text", "border": "border"},
-                        hover={"border": "accent"})
-        change.clicked.connect(self.folder_change_requested)
+        change = settings_button("تغییر", self.folder_change_requested)
         column.addWidget(_SettingRow("پوشه‌ی یادداشت‌ها", s.get("notes_root", ""), change, mono_hint=True))
         for key, label, hint, signal in (
             ("startup", "اجرا همراه ویندوز", "برنامه بعد از روشن شدن رایانه در نوار وظیفه آماده است.",
@@ -1057,19 +1055,7 @@ class SettingsPanel(Overlay):
         column.addSpacing(8)
 
         def action_button(label, action, *, primary=False):
-            button = Button(label, None, height=38, radius=9, padding=(12, 12), px=12.5,
-                            weight=600 if primary else 400,
-                            normal={"bg": "accent" if primary else "surface_alt",
-                                    "fg": "on_accent" if primary else "text",
-                                    "border": None if primary else "border"},
-                            hover={"bg": "accent_hover"} if primary else {"border": "accent"})
-            # Button normally fixes its width to its text. These actions share
-            # the available row width, independently of their Persian labels.
-            button.setMinimumWidth(0)
-            button.setMaximumWidth(16777215)
-            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            button.clicked.connect(action)
-            return button
+            return settings_button(label, action, primary=primary, expanding=True)
 
         connect_row = QHBoxLayout()
         connect_row.setContentsMargins(0, 0, 0, 0)
@@ -1135,10 +1121,7 @@ class SettingsPanel(Overlay):
         column.addSpacing(16)
         save_row = QHBoxLayout()
         save_row.setContentsMargins(0, 0, 0, 0)
-        self._save = Button("ذخیره و تست", None, height=36, radius=9, padding=(18, 18), px=13,
-                            weight=600, normal={"bg": "accent", "fg": "on_accent"},
-                            hover={"bg": "accent_hover"})
-        self._save.clicked.connect(self._save_sync)
+        self._save = settings_button("ذخیره و تست", self._save_sync, primary=True)
         save_row.addWidget(self._save)
         save_row.addStretch(1)
         column.addLayout(save_row)
@@ -1190,11 +1173,7 @@ class SettingsPanel(Overlay):
         return box
 
     def _button(self, label: str, action) -> Button:
-        button = Button(label, None, height=32, radius=8, padding=(14, 14), px=12.5,
-                        normal={"bg": "surface_alt", "fg": "text", "border": "border"},
-                        hover={"border": "accent"})
-        button.clicked.connect(action)
-        return button
+        return settings_button(label, action)
 
     def _reveal(self, edit: QLineEdit):
         hidden = edit.echoMode() == QLineEdit.EchoMode.Password
@@ -1424,9 +1403,7 @@ class _SyncCard(QWidget):
         top.setSpacing(10)
         top.addWidget(_Dot("accent" if sync.get("enabled") else "box"))
         top.addWidget(_Label(sync.get("title", "متصل به Mini App تلگرام"), 14, 600), 1)
-        self.check = Button("بررسی الان", None, height=32, radius=8, padding=(14, 14), px=12.5,
-                            weight=600, normal={"bg": "accent", "fg": "on_accent"},
-                            hover={"bg": "accent_hover"})
+        self.check = settings_button("بررسی الان", primary=True)
         top.addWidget(self.check)
         column.addLayout(top)
         grid = QHBoxLayout()
