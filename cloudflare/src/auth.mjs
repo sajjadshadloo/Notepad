@@ -23,7 +23,7 @@ export async function verifiedTelegramIdentity(initData, token, now = Date.now()
   const hash = params.get('hash');
   const timestamp = Number(params.get('auth_date'));
   if (!hash || !/^[0-9a-f]{64}$/i.test(hash) || !Number.isSafeInteger(timestamp) ||
-      Math.abs(now / 1000 - timestamp) > 86400) return false;
+      Math.abs(now / 1000 - timestamp) > 3600) return false;
   params.delete('hash');
   const data = Array.from(params.entries()).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
     .map(([key, value]) => `${key}=${value}`).join('\n');

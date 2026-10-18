@@ -124,10 +124,15 @@ def merge_lines(base: str, local: str, remote: str, prefer_local: bool = True) -
     return Merged(newline.join(out), clashes)
 
 
+_WINDOWS_RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{n}" for n in range(1, 10)),
+                     *(f"LPT{n}" for n in range(1, 10))}
+
+
 def _safe_path(root: Path, rel: str) -> Path:
     parts = rel.split("/")
     if (not rel or "\\" in rel or ":" in rel or "\x00" in rel
             or any(not x or x in (".", "..") or x.startswith(".") for x in parts)
+            or any(x.split(".")[0].upper() in _WINDOWS_RESERVED for x in parts)
             or Path(rel).suffix.lower() not in (".md", ".txt", ".markdown")):
         raise SyncError("Unsafe cloud path", code="unsafe_path")
     path = root.joinpath(*parts)

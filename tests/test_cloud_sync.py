@@ -173,3 +173,12 @@ def test_a_named_proxy_is_used_even_with_the_system_proxy_off(monkeypatch):
         api.call("/notes")
     assert seen["proxies"] == {"http": "http://127.0.0.1:10808", "https": "http://127.0.0.1:10808"}
     assert seen["url"] == "https://example.invalid/api/notes"
+
+
+def test_windows_reserved_names_are_refused(tmp_path):
+    from core.cloud_sync import SyncError, _safe_path
+
+    for rel in ("CON.md", "nul.txt", "folder/AUX.md", "COM1.md", "LPT9.markdown"):
+        with pytest.raises(SyncError):
+            _safe_path(tmp_path, rel)
+    assert _safe_path(tmp_path, "Projects/console.md") == tmp_path / "Projects" / "console.md"

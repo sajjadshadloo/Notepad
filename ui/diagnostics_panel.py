@@ -4,8 +4,8 @@ from datetime import datetime
 from PyQt6.QtCore import QTimer, Qt, QUrl, QStandardPaths
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (QApplication, QComboBox, QFileDialog, QHeaderView,
-    QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QTreeWidget, QTreeWidgetItem,
-    QVBoxLayout, QWidget)
+    QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QSizePolicy, QTreeWidget,
+    QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from core import diagnostics, settings_manager
 from core.jalali import to_persian_digits
@@ -117,13 +117,18 @@ class DiagnosticsPanel(QWidget):
         self.details.setMaximumBlockCount(120)
         layout.addWidget(self.details)
 
+        # Three equal-width actions with the same gap everywhere: each button
+        # takes an equal share of the row instead of its label's width.
         actions = QHBoxLayout()
+        actions.setSpacing(8)
         self.export_button = self._button('گرفتن گزارش پشتیبانی', self._choose_export, primary=True)
         self.copy_button = self._button('کپی رویداد', self._copy)
         self.copy_button.setEnabled(False)
-        actions.addWidget(self.export_button, 1)
-        actions.addWidget(self.copy_button)
-        actions.addWidget(self._button('پوشهٔ گزارش‌ها', self._open_folder))
+        folder_button = self._button('پوشهٔ گزارش‌ها', self._open_folder)
+        for button in (self.export_button, self.copy_button, folder_button):
+            button.setMinimumWidth(0)
+            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            actions.addWidget(button, 1)
         layout.addLayout(actions)
         verbose = QHBoxLayout()
         self.verbose_button = self._button('ثبت جزئیات · ۱۵ دقیقه', self._toggle_verbose)
