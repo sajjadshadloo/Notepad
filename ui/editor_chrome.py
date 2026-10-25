@@ -178,7 +178,7 @@ class _Separator(QWidget):
 
 
 class FormatBar(QWidget):
-    """B · عنوان ۱ · عنوان ۲ | list · task · date · link | direction ··· تمرکز · پیوندها"""
+    """B · عنوان ۱ · عنوان ۲ | list · task · date · link | direction ··· خواندن · تمرکز · پیوندها"""
 
     bold = pyqtSignal()
     heading = pyqtSignal(int)
@@ -189,6 +189,7 @@ class FormatBar(QWidget):
     direction = pyqtSignal()
     focus = pyqtSignal()
     links_toggled = pyqtSignal(bool)
+    reading_toggled = pyqtSignal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -234,7 +235,21 @@ class FormatBar(QWidget):
         self.direction_button.setToolTip("جهت متن")
         self.direction_button.clicked.connect(self.direction)
         row.addWidget(self.direction_button)
+        # Everything so far edits the text; the reading view has none to edit.
+        self._editing_buttons = [
+            row.itemAt(i).widget() for i in range(row.count())
+            if isinstance(row.itemAt(i).widget(), Button)
+        ]
         row.addStretch(1)
+        self.reading_button = Button("خواندن", "read", height=30, radius=7, padding=(10, 10),
+                                     gap=6, px=12, icon_size=15, stroke=1.4,
+                                     normal={"fg": "muted"}, hover={"fg": "text"},
+                                     active={"bg": "divider", "fg": "accent"})
+        self.reading_button.setCheckable(True)
+        self.reading_button.setToolTip("حالت خواندن — Ctrl+E")
+        self.reading_button.clicked.connect(
+            lambda: self.reading_toggled.emit(self.reading_button.isChecked()))
+        row.addWidget(self.reading_button)
         focus = Button("تمرکز", "focus", height=30, radius=7, padding=(10, 10), gap=6, px=12,
                        icon_size=15, stroke=1.4, normal=idle, hover=over)
         focus.setToolTip("حالت تمرکز — F11")
@@ -250,6 +265,12 @@ class FormatBar(QWidget):
 
     def set_direction_label(self, rtl: bool):
         self.direction_button.set_label("راست‌چین" if rtl else "چپ‌چین")
+
+    def set_reading(self, on: bool):
+        self.reading_button.setChecked(on)
+        self.reading_button.update()
+        for button in self._editing_buttons:
+            button.setEnabled(not on)
 
     def set_links_visible(self, on: bool):
         self.links_button.setChecked(on)

@@ -1,8 +1,9 @@
 from pathlib import Path
 
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import QTimer, pyqtSignal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -30,6 +31,7 @@ def editor_font(latin: str, persian: str, size: float) -> QFont:
 class DocumentTab(QWidget):
     state_changed = pyqtSignal()
     cursor_changed = pyqtSignal()
+    reading_changed = pyqtSignal(bool)
 
     def __init__(
         self,
@@ -67,12 +69,25 @@ class DocumentTab(QWidget):
         self.editor.set_direction_mode(direction_mode)
         self.highlighter = MarkdownHighlighter(self.editor)
         self.editor.markdown_highlighter = self.highlighter
-        layout.addWidget(self.editor)
+        # The editor, and — built the first time it is asked for — the
+        # reading view of the same text (ui/reader_view.py).
+        self.pages = QStackedWidget()
+        self.pages.addWidget(self.editor)
+        layout.addWidget(self.pages)
+        self.reader = None
+        self._focus_layout = False
+        # Typing never happens while reading, but a command can still change
+        # the text (Ctrl+D, a file changed outside the app). One repaint for
+        # a burst of changes.
+        self._reader_timer = QTimer(self, singleShot=True, interval=120)
+        self._reader_timer.timeout.connect(self._render_reader)
 
         self.editor.setPlainText(text)
         self.editor.document().setModified(False)
         self.editor.textChanged.connect(self._invalidate_counts)
         self.editor.textChanged.connect(self.state_changed)
+        self.editor.textChanged.connect(self._reader_out_of_date)
+        self.editor.direction_changed.connect(self._reader_out_of_date)
         self.editor.cursorPositionChanged.connect(self.cursor_changed)
         self.editor.setFocus()
 
@@ -94,9 +109,54 @@ class DocumentTab(QWidget):
 
     def apply_font(self, font: QFont):
         self.editor.setFont(font)
+        self._reader_out_of_date()
 
     def set_focus_layout(self, on: bool):
+        self._focus_layout = on
         self.editor.set_focus_layout(on)
+        if self.reader is not None:
+            self.reader.set_focus_layout(on)
+
+    # Reading view
+
+    @property
+    def reading(self) -> bool:
+        return self.reader is not None and self.pages.currentWidget() is self.reader
+
+    def set_reading(self, on: bool):
+        """Show the note as a finished page, or go back to editing it."""
+        if on == self.reading:
+            return
+        if on:
+            if self.reader is None:
+                from ui.reader_view import ReaderView
+
+                self.reader = ReaderView()
+                self.reader.set_focus_layout(self._focus_layout)
+                # A «[[note]]» clicked while reading opens like one clicked
+                # in the editor.
+                self.reader.link_clicked.connect(self.editor.link_clicked)
+                self.pages.addWidget(self.reader)
+            self._render_reader()
+            self.pages.setCurrentWidget(self.reader)
+            self.reader.setFocus()
+        else:
+            self._reader_timer.stop()
+            self.pages.setCurrentWidget(self.editor)
+            self.editor.setFocus()
+        self.reading_changed.emit(on)
+
+    def refresh_reading(self):
+        """After a theme change: the reading view sets its colours itself."""
+        if self.reading:
+            self.reader.refresh()
+
+    def _reader_out_of_date(self, *_args):
+        if self.reading:
+            self._reader_timer.start()
+
+    def _render_reader(self):
+        self.reader.render(self.text, self.editor.font(), self.editor.direction_mode)
 
     def _invalidate_counts(self):
         self._counts = None

@@ -102,7 +102,7 @@ log = logging.getLogger(__name__)
 TAB_DOT_SIZE = 6
 
 APP_TITLE = "Notepad Plus"
-APP_VERSION = "4.6.3"
+APP_VERSION = "4.7.0"
 
 # Line endings, as characters rather than an escape.
 NEWLINE_CHARS = chr(13) + chr(10)
@@ -675,6 +675,9 @@ class MainWindow(QMainWindow):
             "&Line Numbers", self.toggle_line_numbers, checkable=True
         )
         self.line_numbers_action.setChecked(self._cfg.get("show_line_numbers", True))
+        self.reading_action = self._action(
+            "&Reading View", self.toggle_reading, "Ctrl+E"
+        )
         self.shortcuts_action = self._action(
             "&Keyboard Shortcuts", self.show_shortcuts, "Ctrl+/"
         )
@@ -835,6 +838,7 @@ class MainWindow(QMainWindow):
         bar.direction.connect(self.toggle_document_direction)
         bar.focus.connect(lambda: self.set_focus_mode(True))
         bar.links_toggled.connect(self.set_links_panel_visible)
+        bar.reading_toggled.connect(self.set_reading)
         self.format_bar = bar
 
     def _build_ui(self):
@@ -1146,6 +1150,9 @@ class MainWindow(QMainWindow):
         )
         tab.state_changed.connect(lambda tab=tab: self._document_state_changed(tab))
         tab.cursor_changed.connect(self._update_status)
+        tab.reading_changed.connect(
+            lambda on, tab=tab: tab is self.current_document() and self.format_bar.set_reading(on)
+        )
         tab.editor.zoom_requested.connect(self.change_zoom)
         tab.editor.direction_changed.connect(self._editor_direction_changed)
         tab.editor.link_clicked.connect(self.open_link_target)
@@ -1633,6 +1640,24 @@ class MainWindow(QMainWindow):
         else:
             self._create_linked_note(target)
 
+    # Reading view
+
+    def toggle_reading(self):
+        tab = self.current_document()
+        if tab:
+            self.set_reading(not tab.reading)
+
+    def set_reading(self, on: bool):
+        """Ctrl+E: the current note as a finished page — tables, links and
+        all — or back to editing it. The file is not touched either way."""
+        tab = self.current_document()
+        if tab is None:
+            self.format_bar.set_reading(False)
+            return
+        self.show_page("editor")
+        tab.set_reading(on)
+        self.format_bar.set_reading(tab.reading)
+
     # Focus mode
 
     def toggle_focus_mode(self):
@@ -2047,12 +2072,14 @@ class MainWindow(QMainWindow):
             self._update_crumb()
         if hasattr(self, "links_panel"):
             QTimer.singleShot(0, self.refresh_links_panel)
+        if hasattr(self, "format_bar"):
+            self.format_bar.set_reading(bool(tab and tab.reading))
         if tab:
             self.direction_actions[tab.editor.direction_mode].setChecked(True)
             if tab.encoding in self.encoding_actions:
                 self.encoding_actions[tab.encoding].setChecked(True)
             self._document_state_changed(tab)
-            tab.editor.setFocus()
+            (tab.reader if tab.reading else tab.editor).setFocus()
         else:
             self.setWindowTitle(APP_TITLE)
         self._update_status()
@@ -2094,6 +2121,8 @@ class MainWindow(QMainWindow):
     def _show_search_dialog(self, focus_replace: bool):
         tab = self.current_document()
         if tab:
+            # Search walks the editor; it has to be on screen to show a match.
+            tab.set_reading(False)
             selected = tab.editor.textCursor().selectedText()
             if selected and "\u2029" not in selected:
                 self._find_dialog.find_input.setText(selected)
@@ -2129,6 +2158,7 @@ class MainWindow(QMainWindow):
         tab = self.current_document()
         if not tab:
             return
+        tab.set_reading(False)
         total = tab.editor.document().blockCount()
         current = tab.editor.textCursor().blockNumber() + 1
         line, accepted = QInputDialog.getInt(
@@ -2468,6 +2498,7 @@ class MainWindow(QMainWindow):
         for index in range(self.tabs.count()):
             tab = self.tabs.widget(index)
             tab.highlighter.rehighlight()
+            tab.refresh_reading()
             self.tabs.setTabIcon(index, self._dot_icon(tab.modified))
 
     def show_settings(self, section: str = "look"):

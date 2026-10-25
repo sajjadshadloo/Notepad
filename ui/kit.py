@@ -109,6 +109,7 @@ ICONS = {
     "link": '<path d="M6.8 9.2a2.6 2.6 0 0 0 3.7 0l2.2-2.2a2.6 2.6 0 0 0-3.7-3.7l-.8.8"/><path d="M9.2 6.8a2.6 2.6 0 0 0-3.7 0L3.3 9a2.6 2.6 0 0 0 3.7 3.7l.8-.8"/>',
     "align": '<path d="M3 4h10M3 8h10M7 12h6"/>',
     "focus": '<path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10"/>',
+    "read": '<path d="M8 4.3C6.7 3.4 4.8 3 2.5 3.2v9c2.3-.2 4.2.2 5.5 1.1 1.3-.9 3.2-1.3 5.5-1.1v-9C11.2 3 9.3 3.4 8 4.3z"/><path d="M8 4.3v9"/>',
     "command": '<path d="M3 5l3 3-3 3M8 11.5h5"/>',
 }
 
@@ -333,6 +334,8 @@ class Button(QAbstractButton):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        if not self.isEnabled():
+            painter.setOpacity(0.4)
         look = self.look()
         rect = QRectF(self.rect())
         rounded(
