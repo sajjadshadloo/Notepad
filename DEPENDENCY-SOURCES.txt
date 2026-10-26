@@ -1,6 +1,6 @@
-Notepad Plus 4.6.3 - source availability
-Application source: https://github.com/sajjadshadloo/Notepad/tree/v4.6.3
-Application source archive: https://github.com/sajjadshadloo/Notepad/archive/refs/tags/v4.6.3.zip
+Notepad Plus 4.7.0 - source availability
+Application source: https://github.com/sajjadshadloo/Notepad/tree/v4.7.0
+Application source archive: https://github.com/sajjadshadloo/Notepad/archive/refs/tags/v4.7.0.zip
 
 Dependency source archives (unmodified upstream versions used for this build):
 

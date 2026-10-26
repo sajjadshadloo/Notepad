@@ -2,7 +2,7 @@
 
 یک دفترچهٔ یادداشت و مدیریت کار روزانه برای ویندوز، فارسی و راست‌چین.
 
-[دانلود نصاب ویندوز](https://github.com/sajjadshadloo/Notepad/releases/download/v4.6.3/NotepadPlus-Setup-4.6.3.exe) · [آخرین نسخه](https://github.com/sajjadshadloo/Notepad/releases/latest) · [گزارش مشکل](https://github.com/sajjadshadloo/Notepad/issues/new/choose)
+[دانلود نصاب ویندوز](https://github.com/sajjadshadloo/Notepad/releases/download/v4.7.0/NotepadPlus-Setup-4.7.0.exe) · [آخرین نسخه](https://github.com/sajjadshadloo/Notepad/releases/latest) · [گزارش مشکل](https://github.com/sajjadshadloo/Notepad/issues/new/choose)
 
 ---
 
