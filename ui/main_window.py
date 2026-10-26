@@ -1494,17 +1494,18 @@ class MainWindow(QMainWindow):
 
     def _overdue_and_today(self):
         if self._tasks_watcher is None:
-            return [], 0
+            return [], []
         today = date.today()
         tasks = self._tasks_watcher.all_tasks()
         overdue = sorted((t for t in tasks if not t.done and t.due and t.due.date() < today),
                          key=lambda t: t.due)
-        open_today = sum(1 for t in tasks if not t.done and t.due and t.due.date() == today)
-        return overdue, open_today
+        due_today = sorted((t for t in tasks if not t.done and t.due and t.due.date() == today),
+                           key=lambda t: t.due)
+        return overdue, due_today
 
     def _refill_review(self):
-        overdue, open_today = self._overdue_and_today()
-        self.review.set_tasks(overdue, open_today)
+        overdue, due_today = self._overdue_and_today()
+        self.review.set_tasks(overdue, due_today)
 
     def _review_reschedule(self, path: str, line: int, day):
         self.set_task_day(path, line, day)

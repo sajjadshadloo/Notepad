@@ -1462,7 +1462,7 @@ class _ShortcutRow(QWidget):
 # Morning review
 
 class MorningReview(Overlay):
-    """Once a day: what was left over, one decision each, then «شروع روز»."""
+    """Once a day: what was left over and what is due today, one decision each."""
 
     reschedule = pyqtSignal(str, int, object)
     mark_done = pyqtSignal(str, int)
@@ -1474,7 +1474,6 @@ class MorningReview(Overlay):
         super().__init__(window, card, 560, modal_close=False)
         self._name = name
         self._tasks: list = []
-        self._open_today = 0
         self.closed.connect(self.finished)
         column = QVBoxLayout(card)
         column.setContentsMargins(1, 1, 1, 1)
@@ -1522,40 +1521,41 @@ class MorningReview(Overlay):
         if event.key() == Qt.Key.Key_Escape:
             self.close_overlay()
 
-    def set_tasks(self, overdue: list, open_today: int):
-        """The overdue tasks (open, dated before today) and today's open count."""
-        self._tasks, self._open_today = overdue, open_today
+    def set_tasks(self, overdue: list, due_today: list):
+        """Left over from earlier days, then due today: the same tasks the morning notification lists."""
+        self._tasks = overdue
         today = date.today()
         y, m, d = from_gregorian(today)
         stamp = weekday_name(today) + "، " + to_persian_digits(f"{d}") + " " + MONTHS[m - 1] + " " + to_persian_digits(str(y))
-        self._sub.set_text(stamp + " · " + (to_persian_digits(str(len(overdue))) + " کار از روزهای قبل مانده"
-                                            if overdue else "چیزی از روزهای قبل نمانده"))
+        left = to_persian_digits(str(len(overdue))) + " کار از روزهای قبل مانده" if overdue else "چیزی از روزهای قبل نمانده"
+        today_count = to_persian_digits(str(len(due_today))) + " کار برای امروز" if due_today else ""
+        self._sub.set_text(" · ".join(part for part in (stamp, left, today_count) if part))
         self.all_today.setVisible(bool(overdue))
         page = QWidget()
         rows = QVBoxLayout(page)
-        if overdue:
+        if overdue or due_today:
             rows.setContentsMargins(16, 0, 16, 8)
             rows.setSpacing(8)
             for task in overdue:
                 rows.addWidget(self._row(task))
+            if due_today:
+                rows.addWidget(_Label("کارهای امروز", 12.5, 600, "muted"))
+                for task in due_today:
+                    rows.addWidget(self._row(task, today=True))
         else:
             rows.setContentsMargins(24, 26, 24, 20)
-            rows.addWidget(_AllClear(open_today))
+            rows.addWidget(_AllClear())
         rows.addStretch(1)
         self.scroll.setWidget(page)
-        if overdue:
-            content = 8 + sum(r.sizeHint().height() for r in page.findChildren(_ReviewRow)) \
-                + 8 * (len(overdue) - 1)
-        else:
-            content = 26 + 20 + _AllClear(0).height()
+        content = page.sizeHint().height()
         head = 24 + 16 + sum(QFontMetricsF(font(px, w)).height() for px, w in
                              ((12.5, 600), (21, 700), (12.5, 400))) + 8
         self._height = round(2 + head + content + 1 + 14 + 36 + 14)
         if self.isVisible():
             self._place()
 
-    def _row(self, task) -> QWidget:
-        row = _ReviewRow(task)
+    def _row(self, task, *, today: bool = False) -> QWidget:
+        row = _ReviewRow(task, for_today=today)
         row.today.clicked.connect(lambda: self.reschedule.emit(task.path, task.line_number, date.today()))
         row.tomorrow.clicked.connect(
             lambda: self.reschedule.emit(task.path, task.line_number, date.today() + timedelta(days=1)))
@@ -1576,12 +1576,14 @@ class _FootRule(QWidget):
 
 
 class _ReviewRow(QWidget):
-    def __init__(self, task, parent=None):
+    def __init__(self, task, parent=None, *, for_today: bool = False):
         super().__init__(parent)
         from ui.today_rail import task_source
 
         self._task = task
         self._src = task_source(task)
+        # Red marks what slipped; a task due today is only due, not late.
+        self._tone = "accent" if for_today else "danger"
         column = QVBoxLayout(self)
         column.setContentsMargins(14, 14, 14, 14)
         column.setSpacing(10)
@@ -1597,7 +1599,12 @@ class _ReviewRow(QWidget):
             "bg": "surface_alt", "fg": "text", "border": "border"}))
         self.today.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.today.setMaximumWidth(10000)
+        self.today.setVisible(not for_today)
         self.tomorrow = Button("فردا", None, padding=(14, 14), **outline)
+        if for_today:
+            # Nothing is moved to today here, so «فردا» takes the free width instead.
+            self.tomorrow.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            self.tomorrow.setMaximumWidth(10000)
         self.done = Button("انجام شده", None, padding=(14, 14), **outline)
         self.remove = Button("", "trash", height=32, width=34, radius=8, padding=(0, 0),
                              icon_size=14, stroke=1.4, normal={"fg": "danger", "border": "border"})
@@ -1615,8 +1622,8 @@ class _ReviewRow(QWidget):
         w = text_width(when, f) + 18
         h = QFontMetricsF(f).height() + 4
         pill = QRectF(0, 0, w, h)
-        rounded(p, pill, 6, fill=tint("danger", 0.12))
-        draw_text(p, pill, when, f, col("danger"), Qt.AlignmentFlag.AlignCenter, elide_text=False)
+        rounded(p, pill, 6, fill=tint(self._tone, 0.12))
+        draw_text(p, pill, when, f, col(self._tone), Qt.AlignmentFlag.AlignCenter, elide_text=False)
         text_h = 14 * 1.7
         draw_text(p, QRectF(w + 10, 0, r.width() - w - 10, text_h), self._task.text, font(14), col("text"))
         draw_text(p, QRectF(w + 10, text_h + 2, r.width() - w - 10, r.height() - text_h - 2),
@@ -1631,9 +1638,8 @@ class _ReviewRow(QWidget):
 
 
 class _AllClear(QWidget):
-    def __init__(self, open_today: int, parent=None):
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self._open = open_today
         self.setFixedHeight(44 + 10 + 24 + 10 + 20)
 
     def paintEvent(self, _event):
@@ -1647,7 +1653,7 @@ class _AllClear(QWidget):
         draw_text(p, QRectF(0, 54, self.width(), 24), "همه‌چیز مرتب است", font(15, 600), col("text"),
                   Qt.AlignmentFlag.AlignCenter)
         draw_text(p, QRectF(0, 88, self.width(), 20),
-                  "امروز " + to_persian_digits(str(self._open)) + " کار باز داری.", font(12.5),
+                  "امروز کار بازی نداری.", font(12.5),
                   col("muted"), Qt.AlignmentFlag.AlignCenter)
         p.end()
 
