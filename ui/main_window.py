@@ -102,7 +102,7 @@ log = logging.getLogger(__name__)
 TAB_DOT_SIZE = 6
 
 APP_TITLE = "Notepad Plus"
-APP_VERSION = "4.7.1"
+APP_VERSION = "4.7.2"
 
 # Line endings, as characters rather than an escape.
 NEWLINE_CHARS = chr(13) + chr(10)
@@ -836,6 +836,7 @@ class MainWindow(QMainWindow):
         bar.bold.connect(self.bold_action.trigger)
         bar.heading.connect(lambda level: self.heading_actions[level - 1].trigger())
         bar.bullets.connect(self.bullet_action.trigger)
+        bar.numbered.connect(self.numbered_action.trigger)
         bar.task.connect(self.todo_action.trigger)
         bar.date.connect(self.stamp_action.trigger)
         bar.link.connect(self.insert_note_link)
@@ -1091,7 +1092,7 @@ class MainWindow(QMainWindow):
             tab.editor.tables.insert_table()
 
     def show_stamp_picker(self):
-        """The @ button: pick the day the task under the cursor is due."""
+        """The @ button: pick the day for a task deadline or insert a date stamp."""
         tab = self.current_document()
         if not tab:
             return
@@ -1101,13 +1102,25 @@ class MainWindow(QMainWindow):
         task = parse_task(line)
         if task is not None and task.due is not None:
             existing = task.due.date()
+        else:
+            from core.tasks import _STAMP_REWRITE_RE
+            from core.jalali import to_ascii_digits, to_gregorian
+            from datetime import date as _dt_date
+            match = _STAMP_REWRITE_RE.search(line)
+            if match is not None:
+                try:
+                    raw_y = int(to_ascii_digits(match.group("year")))
+                    raw_m = int(to_ascii_digits(match.group("month")))
+                    raw_d = int(to_ascii_digits(match.group("day")))
+                    if raw_y < 1600:
+                        existing = to_gregorian(raw_y, raw_m, raw_d)
+                    else:
+                        existing = _dt_date(raw_y, raw_m, raw_d)
+                except (ValueError, TypeError):
+                    existing = None
 
         picker = StampPicker(self._cfg["notes_root"], existing, self)
-        picker.picked.connect(
-            lambda day: self._transform_selected_lines(
-                lambda text: set_stamp(text, day)
-            )
-        )
+        picker.picked.connect(self._apply_chosen_date)
         # Under the @ button, so it reads as that button's own menu.
         anchor = self.format_bar
         if anchor is not None:
@@ -1115,6 +1128,43 @@ class MainWindow(QMainWindow):
                 anchor.mapToGlobal(anchor.rect().bottomLeft())
             )
         picker.exec()
+
+    def _apply_chosen_date(self, day):
+        tab = self.current_document()
+        if not tab:
+            return
+        editor = tab.editor
+        cursor = editor.textCursor()
+        block = cursor.block()
+        line = block.text()
+        task = parse_task(line)
+
+        from core.jalali import from_gregorian, to_persian_digits
+        year, month, day_num = from_gregorian(day)
+        stamp_str = to_persian_digits("@%04d/%02d/%02d" % (year, month, day_num))
+
+        if task is not None:
+            self._transform_selected_lines(lambda text: set_stamp(text, day))
+        else:
+            from core.tasks import _STAMP_SPAN_RE
+            span_match = _STAMP_SPAN_RE.search(line)
+            if span_match is not None:
+                self._transform_selected_lines(
+                    lambda text: text[:span_match.start()] + stamp_str + text[span_match.end():]
+                )
+            elif not line.strip():
+                cursor.beginEditBlock()
+                cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+                cursor.insertText(stamp_str + " ")
+                cursor.endEditBlock()
+            else:
+                cursor.beginEditBlock()
+                pos = cursor.positionInBlock()
+                prefix = " " if pos > 0 and line[pos - 1] not in " \t" else ""
+                suffix = " " if pos < len(line) and line[pos] not in " \t" else " "
+                cursor.insertText(prefix + stamp_str + suffix)
+                cursor.endEditBlock()
+        editor.setFocus()
 
     def _popup_status_menu(self, button, actions):
         menu = QMenu(self)

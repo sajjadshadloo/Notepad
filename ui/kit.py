@@ -106,6 +106,7 @@ ICONS = {
     "chevron_left": '<path d="M10 4 6 8l4 4"/>',
     "close": '<path d="M4 4l8 8M12 4l-8 8"/>',
     "bullets": '<path d="M6 4h7.5M6 8h7.5M6 12h7.5"/><circle cx="3" cy="4" r=".7" fill="currentColor"/><circle cx="3" cy="8" r=".7" fill="currentColor"/><circle cx="3" cy="12" r=".7" fill="currentColor"/>',
+    "numbered": '<path d="M6.5 4h7M6.5 8h7M6.5 12h7"/><path d="M2.5 3.5l1-.5v3m-1 0h2" stroke-width="1.1"/>',
     "link": '<path d="M6.8 9.2a2.6 2.6 0 0 0 3.7 0l2.2-2.2a2.6 2.6 0 0 0-3.7-3.7l-.8.8"/><path d="M9.2 6.8a2.6 2.6 0 0 0-3.7 0L3.3 9a2.6 2.6 0 0 0 3.7 3.7l.8-.8"/>',
     "table": '<rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M2 7h12M2 10h12M6.5 3v10"/>',
     "align": '<path d="M3 4h10M3 8h10M7 12h6"/>',

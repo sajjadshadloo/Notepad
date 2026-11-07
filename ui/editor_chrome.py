@@ -183,6 +183,7 @@ class FormatBar(QWidget):
     bold = pyqtSignal()
     heading = pyqtSignal(int)
     bullets = pyqtSignal()
+    numbered = pyqtSignal()
     task = pyqtSignal()
     date = pyqtSignal()
     link = pyqtSignal()
@@ -224,6 +225,7 @@ class FormatBar(QWidget):
             row.addWidget(widget)
         row.addWidget(_Separator())
         for glyph, tip, signal in (("bullets", "فهرست", self.bullets),
+                                   ("numbered", "فهرست شماره‌دار — Ctrl+Shift+7", self.numbered),
                                    ("tasks", "تبدیل خط به کار — Ctrl+Shift+9", self.task),
                                    ("calendar", "تاریخ کار — Ctrl+Shift+A", self.date),
                                    ("table", "جدول — Ctrl+Alt+T", self.table),
