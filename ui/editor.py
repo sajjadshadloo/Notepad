@@ -19,6 +19,8 @@ from core.list_editing import (
 )
 from core.jalali import format_pill, to_persian_digits
 from core.rtl_detector import detect_direction
+from core import tables as table_text
+from ui.table_view import TableSupport
 from core.formatting import HEADING_RE
 from core.links import LINK_RE
 from core.tasks import parse_task, stamp_span
@@ -115,6 +117,7 @@ class SmartEditor(QTextEdit):
         self._dirty_last = -1
         self._needs_full_pass = True
         self._line_area = LineNumberArea(self)
+        self.tables = TableSupport(self)
         self._margin_area = MarginArea(self)
         self._focus_layout = False
         self._laying_out = False
@@ -260,6 +263,8 @@ class SmartEditor(QTextEdit):
         super().resizeEvent(event)
         self._invalidate_marker_cache()
         self._place_side_areas()
+        self.tables.schedule()
+        self.tables.reposition()
 
     def changeEvent(self, event):
         super().changeEvent(event)
@@ -320,7 +325,11 @@ class SmartEditor(QTextEdit):
             first_line = self.cursorRect(QTextCursor(block))
             if first_line.top() > bottom_limit:
                 break
-            if block.isVisible() and first_line.bottom() >= event.rect().top():
+            if (
+                block.isVisible()
+                and first_line.bottom() >= event.rect().top()
+                and not table_text.is_separator(block.text())
+            ):
                 draw_text(painter, QRectF(column_x, first_line.top(), NUMBER_COLUMN, first_line.height()),
                           to_persian_digits(str(block.blockNumber() + 1)), number_font, colour,
                           Qt.AlignmentFlag.AlignCenter, elide_text=False)
@@ -367,6 +376,7 @@ class SmartEditor(QTextEdit):
     def _refresh_layout(self):
         """Single pass: scan code blocks once, then reuse for directions."""
         self.apply_directions(only_dirty=True)
+        self.tables.refresh()
 
     def _direction_for_text(self, text: str) -> str:
         if self.direction_mode in {"rtl", "ltr"}:
@@ -406,6 +416,9 @@ class SmartEditor(QTextEdit):
             else 0.0
         )
         top, bottom, distance = self._row_spacing(cursor.block().text())
+        if table_text.is_row(cursor.block().text()):
+            # A table row sits flush against the next: the grid is one object.
+            top = bottom = distance = 0.0
         # Exact comparison: an `&` test passes as soon as the AlignAbsolute
         # bit matches, silently skipping the actual left/right realignment.
         if (
@@ -593,6 +606,22 @@ class SmartEditor(QTextEdit):
             event.ignore()
             return
 
+        # The text under a drawn table is invisible; typing into it would
+        # change a cell nobody can see. Open that cell instead.
+        if (
+            table_text.is_row(self.textCursor().block().text())
+            and not self.tables.editing()
+            and not event.modifiers() & Qt.KeyboardModifier.ControlModifier
+            and (
+                event.text().strip()
+                or event.key()
+                in (Qt.Key.Key_Backspace, Qt.Key.Key_Delete, Qt.Key.Key_Return, Qt.Key.Key_Enter)
+            )
+        ):
+            self.tables.enter_at_cursor()
+            event.accept()
+            return
+
         if self._handle_list_key(event):
             event.accept()
             return
@@ -609,6 +638,15 @@ class SmartEditor(QTextEdit):
         previous = self.textCursor().block()
         previous_direction = self.current_direction()
         super().keyPressEvent(event)
+
+        if event.key() in (
+            Qt.Key.Key_Up,
+            Qt.Key.Key_Down,
+            Qt.Key.Key_PageUp,
+            Qt.Key.Key_PageDown,
+        ):
+            # Arrowing onto a table opens its nearest cell.
+            self.tables.enter_at_cursor()
 
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             current = self.textCursor().block()
@@ -868,6 +906,17 @@ class SmartEditor(QTextEdit):
         cursor = self.textCursor()
         menu = QMenu(self)
 
+        cell = self.tables.cell_at(self.viewport().mapFromGlobal(event.globalPos()))
+        if cell is not None:
+            block = document.findBlockByNumber(cell[0])
+            menu.addAction("ردیف جدید در زیر", lambda: self.tables.add_row_after(block))
+            menu.addAction("حذف این ردیف", lambda: self.tables.delete_row(block))
+            menu.addAction("ستون جدید", lambda: self.tables.add_column(block))
+            menu.addAction(
+                "حذف این ستون", lambda: self.tables.delete_column(block, cell[1])
+            )
+            menu.addSeparator()
+
         undo = menu.addAction("Undo\tCtrl+Z", self.undo)
         undo.setEnabled(document.isUndoAvailable())
         redo = menu.addAction("Redo\tCtrl+Y", self.redo)
@@ -1125,6 +1174,10 @@ class SmartEditor(QTextEdit):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         theme = current_palette()
 
+        self.tables.check_stale()
+        self.tables.paint(painter, event.rect())
+        self.tables.reposition()
+
         # The date chip: the stamp's own characters are painted invisible by
         # the highlighter and this is drawn over the room they reserve, so
         # «@1405/07/03» reads as «امروز» while the file keeps plain text.
@@ -1213,6 +1266,11 @@ class SmartEditor(QTextEdit):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton and not event.modifiers():
+            cell = self.tables.cell_at(event.position().toPoint())
+            if cell is not None:
+                self.tables.open_cell(*cell)
+                event.accept()
+                return
             target = self._link_at(event.position().toPoint())
             if target is not None:
                 self.link_clicked.emit(target)
@@ -1265,3 +1323,4 @@ class SmartEditor(QTextEdit):
         # the previous content and the first pass must visit every paragraph.
         self._needs_full_pass = True
         self.apply_directions()
+        self.tables.schedule()

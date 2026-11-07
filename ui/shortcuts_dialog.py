@@ -48,6 +48,7 @@ SECTIONS = [
             ("Ctrl+Shift+9", "To-do list"),
             ("Ctrl+D", "Toggle to-do done"),
             ("Ctrl+Shift+A", "Give the task under the cursor a date"),
+            ("Ctrl+Alt+T", "Insert a table"),
             ("Ctrl+Right Shift", "Right-to-left paragraph"),
             ("Ctrl+Left Shift", "Left-to-right paragraph"),
         ],

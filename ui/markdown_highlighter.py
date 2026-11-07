@@ -28,6 +28,9 @@ HIDDEN_MARKER_SIZE = 1.0
 # ``**bold**`` — no space right after the opening or before the closing
 # marker, matching how Markdown itself parses strong emphasis.
 BOLD_RE = re.compile(r"\*\*(?!\s)(.+?)(?<!\s)\*\*")
+CODE_RE = re.compile(r"`([^`\n]+)`")
+# A line of three or more dashes, stars or underscores on its own.
+RULE_RE = re.compile(r"^\s*([-*_])(?:\s*\1){2,}\s*$")
 
 class MarkdownHighlighter(QSyntaxHighlighter):
     def __init__(self, editor):
@@ -38,6 +41,35 @@ class MarkdownHighlighter(QSyntaxHighlighter):
         return current_palette()
 
     def highlightBlock(self, text: str):
+        # A table row is drawn as part of a grid, not as text.
+        if self._editor.tables.style_row(self, self.currentBlock(), text):
+            return
+        if RULE_RE.match(text):
+            # Painted as a line by the editor; the dashes are not shown.
+            gone = QTextCharFormat()
+            gone.setForeground(QColor(0, 0, 0, 0))
+            self.setFormat(0, len(text), gone)
+            return
+        self._highlight(text)
+        self._apply_inline_code(text)
+
+    def _apply_inline_code(self, text: str):
+        """`code` becomes a small monospace chip with no backticks."""
+        if "`" not in text:
+            return
+        chip = QColor(self._palette()["hover"])
+        for match in CODE_RE.finditer(text):
+            inner = QTextCharFormat(self.format(match.start() + 1))
+            inner.setFontFamilies(["Consolas"])
+            inner.setBackground(chip)
+            self.setFormat(match.start() + 1, len(match.group(1)), inner)
+            for tick in (match.start(), match.end() - 1):
+                gone = QTextCharFormat(self.format(tick))
+                gone.setForeground(QColor(0, 0, 0, 0))
+                gone.setFontPointSize(HIDDEN_MARKER_SIZE)
+                self.setFormat(tick, 1, gone)
+
+    def _highlight(self, text: str):
         colors = self._palette()
         base_size = self._editor.font().pointSizeF()
         marker_direction = (

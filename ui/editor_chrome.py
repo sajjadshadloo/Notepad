@@ -186,6 +186,7 @@ class FormatBar(QWidget):
     task = pyqtSignal()
     date = pyqtSignal()
     link = pyqtSignal()
+    table = pyqtSignal()
     direction = pyqtSignal()
     focus = pyqtSignal()
     links_toggled = pyqtSignal(bool)
@@ -225,6 +226,7 @@ class FormatBar(QWidget):
         for glyph, tip, signal in (("bullets", "فهرست", self.bullets),
                                    ("tasks", "تبدیل خط به کار — Ctrl+Shift+9", self.task),
                                    ("calendar", "تاریخ کار — Ctrl+Shift+A", self.date),
+                                   ("table", "جدول — Ctrl+Alt+T", self.table),
                                    ("link", "پیوند به یادداشت — [[", self.link)):
             button = icon_button(glyph, tip)
             button.clicked.connect(signal)

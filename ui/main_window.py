@@ -102,7 +102,7 @@ log = logging.getLogger(__name__)
 TAB_DOT_SIZE = 6
 
 APP_TITLE = "Notepad Plus"
-APP_VERSION = "4.7.0"
+APP_VERSION = "4.7.1"
 
 # Line endings, as characters rather than an escape.
 NEWLINE_CHARS = chr(13) + chr(10)
@@ -652,6 +652,9 @@ class MainWindow(QMainWindow):
         self.stamp_action = self._action(
             "Set &Date…", self.show_stamp_picker, "Ctrl+Shift+A"
         )
+        self.table_action = self._action(
+            "Insert &Table", self.insert_table, "Ctrl+Alt+T"
+        )
         self.font_action = self._action("&Font…", self.show_settings)
 
         # View
@@ -806,6 +809,7 @@ class MainWindow(QMainWindow):
         format_menu.addAction(self.todo_action)
         format_menu.addAction(self.toggle_done_action)
         format_menu.addAction(self.stamp_action)
+        format_menu.addAction(self.table_action)
         format_menu.addSeparator()
         format_menu.addAction(self.font_action)
 
@@ -835,6 +839,7 @@ class MainWindow(QMainWindow):
         bar.task.connect(self.todo_action.trigger)
         bar.date.connect(self.stamp_action.trigger)
         bar.link.connect(self.insert_note_link)
+        bar.table.connect(self.table_action.trigger)
         bar.direction.connect(self.toggle_document_direction)
         bar.focus.connect(lambda: self.set_focus_mode(True))
         bar.links_toggled.connect(self.set_links_panel_visible)
@@ -1078,6 +1083,12 @@ class MainWindow(QMainWindow):
         current = self._cfg.get("theme", "system")
         resolved = "light" if resolve_theme(current) == "light" else "dark"
         self.set_theme("dark" if resolved == "light" else "light")
+
+    def insert_table(self):
+        """The table button: an empty grid at the cursor, ready to type in."""
+        tab = self.current_document()
+        if tab:
+            tab.editor.tables.insert_table()
 
     def show_stamp_picker(self):
         """The @ button: pick the day the task under the cursor is due."""
