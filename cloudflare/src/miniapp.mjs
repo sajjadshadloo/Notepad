@@ -22,6 +22,7 @@ export const miniAppHtml = `<!doctype html>
   <link rel="stylesheet" href="/app.css">
 </head>
 <body>
+<div id="probe" class="probe" aria-hidden="true"><i></i><i></i><i></i></div>
 <div id="app" class="app">
   <header class="bar">
     <button id="closeApp" class="bar-close" type="button">بستن</button>
