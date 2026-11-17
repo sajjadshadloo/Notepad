@@ -11,7 +11,7 @@ import { stampFor } from './jalali.js';
 const noop = () => {};
 
 export function createApp(root, host = {}) {
-  const h = { changed: noop, dirty: noop, cursor: noop, ready: noop, noteLink: noop, dateRequested: noop, zoom: noop, ...host };
+  const h = { changed: noop, dirty: noop, cursor: noop, ready: noop, noteLink: noop, dateRequested: noop, zoom: noop, openUrl: (u) => window.open(u, '_blank'), ...host };
   root.innerHTML = '<div class="toolbar"></div><div class="scroller"><div class="page"></div></div>';
   const toolbarEl = root.querySelector('.toolbar');
   const pageEl = root.querySelector('.page');
@@ -22,6 +22,7 @@ export function createApp(root, host = {}) {
   let lastText = null;
   let starts = [];
   let timer = null;
+  let suppressCursor = false;
 
   const text = () => {
     if (!editor) return '';
@@ -43,15 +44,14 @@ export function createApp(root, host = {}) {
     if (!timer) timer = setTimeout(() => push(), 80);
   };
 
-  function cursorInfo() {
-    if (!editor) return;
-    const { selection, doc } = editor.state;
-    const $from = selection.$from;
-    const top = $from.depth ? $from.index(0) : 0;
+  // The file line (1-based) a position is on.
+  function lineOf($pos) {
+    // Select-all puts both ends at the document level: clamp to a block.
+    const top = $pos.depth ? $pos.index(0) : Math.min($pos.index(0), $pos.node(0).childCount - 1);
     let line = starts[top] ?? 0;
     // Inside a list the caret is on the item's own line, not the list's first.
-    for (let d = $from.depth; d >= 1; d -= 1) {
-      const key = $from.node(d).attrs && $from.node(d).attrs.srcKey;
+    for (let d = $pos.depth; d >= 1; d -= 1) {
+      const key = $pos.node(d).attrs && $pos.node(d).attrs.srcKey;
       if (key && String(key).includes('.')) {
         const [c, i] = String(key).split('.').map(Number);
         const chunk = state.chunks[c];
@@ -59,11 +59,17 @@ export function createApp(root, host = {}) {
         break;
       }
     }
+    return line + 1;
+  }
+
+  function cursorInfo() {
+    if (!editor || suppressCursor) return;
+    const { selection, doc } = editor.state;
     h.cursor({
-      line: line + 1,
-      column: $from.parentOffset + 1,
+      line: lineOf(selection.$from),
+      column: selection.$from.parentOffset + 1,
       selected: selection.empty ? 0 : doc.textBetween(selection.from, selection.to, ' ').length,
-      block: top,
+      endLine: lineOf(selection.$to),
     });
   }
 
@@ -200,6 +206,19 @@ export function createApp(root, host = {}) {
 
   window.__noteLink = (target) => h.noteLink(target);
 
+  // Like Word: Ctrl+click opens a link; a plain click just places the caret.
+  const linkAt = (e) => e.target.closest && e.target.closest('a[href]');
+  pageEl.addEventListener('click', (e) => {
+    const a = linkAt(e);
+    if (a && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      h.openUrl(a.getAttribute('href'));
+    }
+  });
+  pageEl.addEventListener('mousemove', (e) => {
+    pageEl.classList.toggle('ctrl-link', (e.ctrlKey || e.metaKey) && !!linkAt(e));
+  });
+
   const api = {
     open: (value) => mount(value),
     // An outside edit (a task ticked elsewhere): reload, keep the caret.
@@ -230,6 +249,29 @@ export function createApp(root, host = {}) {
     selectedText: () => (editor
       ? editor.state.doc.textBetween(editor.state.selection.from, editor.state.selection.to, '\n')
       : ''),
+    // Select the n-th match of `needle` in the page's own text, so the
+    // highlight is the very match the host is about to replace.
+    selectMatch: (needle, index, caseSensitive) => {
+      if (!editor || !needle) return false;
+      const want = caseSensitive ? needle : needle.toLowerCase();
+      let seen = 0;
+      let hit = null;
+      editor.state.doc.descendants((node, pos) => {
+        if (hit || !node.isText) return;
+        const hay = caseSensitive ? node.text : node.text.toLowerCase();
+        let at = hay.indexOf(want);
+        while (at !== -1) {
+          if (seen === index) { hit = [pos + at, pos + at + needle.length]; return; }
+          seen += 1;
+          at = hay.indexOf(want, at + want.length);
+        }
+      });
+      if (!hit) return false;
+      suppressCursor = true;
+      editor.chain().setTextSelection({ from: hit[0], to: hit[1] }).scrollIntoView().run();
+      suppressCursor = false;
+      return true;
+    },
     scrollToTop: () => { scroller.scrollTop = 0; },
   };
   mount('');

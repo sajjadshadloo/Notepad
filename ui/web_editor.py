@@ -70,8 +70,8 @@ class _Bridge(QObject):
         self.became_dirty.emit()
 
     @pyqtSlot(int, int, int, int)
-    def cursor(self, line, column, selected, block):
-        self.cursor_reported.emit(line, column, selected, block)
+    def cursor(self, line, column, selected, end_line):
+        self.cursor_reported.emit(line, column, selected, end_line)
 
     @pyqtSlot()
     def ready(self):
@@ -80,6 +80,13 @@ class _Bridge(QObject):
     @pyqtSlot(str)
     def noteLink(self, target):
         self.note_link.emit(target)
+
+    @pyqtSlot(str)
+    def openUrl(self, url):
+        # Only ordinary web and mail links leave the app.
+        if url.lower().startswith(("http://", "https://", "mailto:")):
+            from PyQt6.QtGui import QDesktopServices
+            QDesktopServices.openUrl(QUrl(url))
 
     @pyqtSlot()
     def dateRequested(self):
@@ -120,6 +127,7 @@ class WebEditor(QWidget):
         self.direction_mode = "rtl"
         self.markdown_highlighter = None
         self.line = 1
+        self.end_line = 1
         self.column = 1
         self.selected = 0
 
@@ -274,17 +282,25 @@ class WebEditor(QWidget):
         if not block.isValid():
             block = self._doc.lastBlock()
         cursor.setPosition(block.position() + min(max(0, self.column - 1), max(0, block.length() - 1)))
+        if self.end_line > self.line:
+            # A selection over several lines: the whole lines it touches.
+            last = self._doc.findBlockByNumber(self.end_line - 1)
+            if last.isValid():
+                cursor.setPosition(block.position())
+                cursor.setPosition(last.position() + max(0, last.length() - 1),
+                                   QTextCursor.MoveMode.KeepAnchor)
         return cursor
 
     def setTextCursor(self, cursor: QTextCursor):
         self._match = None
-        self.line = cursor.blockNumber() + 1
+        self.line = self.end_line = cursor.blockNumber() + 1
         self.column = cursor.positionInBlock() + 1
         self.go_to_line(self.line)
         self.cursorPositionChanged.emit()
 
-    def _on_cursor(self, line, column, selected, _block):
+    def _on_cursor(self, line, column, selected, end_line):
         self.line, self.column, self.selected = line, column, selected
+        self.end_line = max(line, end_line)
         self._match = None
         self.cursorPositionChanged.emit()
 
@@ -323,12 +339,18 @@ class WebEditor(QWidget):
             return False
         self._match = found
         if self._view is not None and self._is_ready:
-            page_flags = QWebEnginePage.FindFlag(0)
-            if flags & QTextDocument.FindFlag.FindBackward:
-                page_flags |= QWebEnginePage.FindFlag.FindBackward
-            if flags & QTextDocument.FindFlag.FindCaseSensitively:
-                page_flags |= QWebEnginePage.FindFlag.FindCaseSensitively
-            self._page.findText(needle, page_flags)
+            # Highlight the very match that was found, not the page's own
+            # first guess: which one is "n-th" is counted in the text.
+            case = bool(flags & QTextDocument.FindFlag.FindCaseSensitively)
+            plain = flags & ~QTextDocument.FindFlag.FindBackward
+            index, probe = 0, QTextCursor(self._doc)
+            while True:
+                probe = self._doc.find(needle, probe, plain)
+                if probe.isNull() or probe.selectionStart() >= found.selectionStart():
+                    break
+                index += 1
+            self.call("selectMatch", needle, index, case)
+            return True
         return True
 
     # Look

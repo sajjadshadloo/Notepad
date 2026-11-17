@@ -9,10 +9,11 @@ function start(bridge) {
       changed: (t) => bridge.changed(t),
       dirty: () => bridge.dirty(),
       zoom: (d) => bridge.zoom(d),
-      cursor: (c) => bridge.cursor(c.line, c.column, c.selected, c.block),
+      cursor: (c) => bridge.cursor(c.line, c.column, c.selected, c.endLine),
       ready: () => bridge.ready(),
       noteLink: (t) => bridge.noteLink(t),
       dateRequested: () => bridge.dateRequested(),
+      openUrl: (u) => bridge.openUrl(u),
     }
     : {};
   window.NotepadEditor = createApp(document.getElementById('app'), host);

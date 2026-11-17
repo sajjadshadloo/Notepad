@@ -101,3 +101,11 @@ def test_direction_modes(editor):
     assert editor.current_direction() == "ltr"
     editor.set_direction_mode("auto")
     assert editor.current_direction() == "rtl"
+
+
+def test_a_selection_over_several_lines_is_every_line_it_touches(editor):
+    editor.setPlainText("اول\nدوم\nسوم\n")
+    editor._on_cursor(1, 2, 9, 3)
+    cursor = editor.textCursor()
+    assert cursor.document().findBlock(cursor.selectionStart()).blockNumber() == 0
+    assert cursor.document().findBlock(cursor.selectionEnd()).blockNumber() == 2

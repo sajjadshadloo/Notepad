@@ -79,6 +79,7 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
 .ProseMirror h3 { font-size: 1.1em; font-weight: 700; margin-top: .2em; }
 .ProseMirror strong { font-weight: 700; }
 .ProseMirror a { color: var(--accent); text-decoration: none; }
+.page.ctrl-link .ProseMirror a:hover { text-decoration: underline; cursor: pointer; }
 .ProseMirror code { font-family: Consolas, "Cascadia Mono", monospace; font-size: .9em; background: var(--code); padding: 1px 6px; border-radius: 5px; direction: ltr; unicode-bidi: embed; }
 .ProseMirror pre { background: var(--code); border-radius: 10px; padding: 12px 16px; direction: ltr; text-align: left; overflow-x: auto; }
 .ProseMirror pre code { background: none; padding: 0; }
