@@ -73,6 +73,9 @@ def check(browser, engine, width, height, url):
     saved = []
     with browser.new_context(viewport={"width": width, "height": height},
                              is_mobile=True, has_touch=True) as context:
+        # This check is about the plain editor, which is what the page falls
+        # back to when the rich editor's script cannot load.
+        context.route("**/editor/**", lambda route: route.abort())
         context.add_init_script("""window.__tgEvents = {};
           window.Telegram = {WebApp: {
             viewportHeight: innerHeight, initData: 'test-only', colorScheme: 'light',
@@ -115,6 +118,8 @@ def check(browser, engine, width, height, url):
         page.locator(".note-main").filter(has_text="scroll-check").click()
         area = page.locator("#edText")
         area.wait_for()
+        # The "new editor did not load" notice sits over the text for a few seconds.
+        page.locator("#toast").wait_for(state="hidden", timeout=10000)
         assert area.input_value() == LONG_TEXT
         assert area.evaluate("el => el.scrollHeight > el.clientHeight"), "Long note is clipped"
         assert area.evaluate("el => getComputedStyle(el).overflowY") == "auto"
@@ -151,8 +156,8 @@ def check(browser, engine, width, height, url):
         area.press("End")
         area.type(" END-OF-NOTE")
         assert area.input_value().endswith(" END-OF-NOTE")
-        page.locator("#edSave").click()
-        page.wait_for_function("() => document.querySelector('#edState').textContent === 'ذخیره شد'")
+        # There is no save button: the note saves itself a moment after typing stops.
+        page.wait_for_function("() => document.querySelector('#edState').textContent === 'ذخیره شد'", timeout=8000)
         assert saved == [LONG_TEXT + " END-OF-NOTE"], "Save changed or lost text"
         page.locator(".ed-back").click()
         page.locator("#nav").wait_for(state="visible")

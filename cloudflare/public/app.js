@@ -522,7 +522,7 @@
   const S = {
     tab: 'today', editor: null, sheet: null,
     nFolder: 'all', nQuery: '', sort: prefs('sort', 'recent'), tFilter: 'all',
-    calMode: prefs('cal', 'month'), selDay: T, rich: prefs('rich', '') === '1',
+    calMode: prefs('cal', 'month'), selDay: T, rich: true, theme: prefs('theme', 'auto'),
     cap: '', capDest: 'task', capDay: null, capTime: null,
     selTask: null, selNote: null, conflictId: null, pick: 'current',
   };
@@ -893,9 +893,17 @@
   }
   const edNote = () => S.editor && S.editor.id ? notes.find(n => n.id === S.editor.id) : null;
   const dirty = () => Boolean(S.editor) && (S.editor.id ? S.editor.draft !== S.editor.base : S.editor.draft.trim() !== '');
-  async function saveNote() {
+  // The note saves itself a moment after you stop typing, and when you leave.
+  let saveTimer = 0;
+  function scheduleSave() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => saveNote(true), 1500);
+  }
+  const DEFAULT_TITLE = 'یادداشت بی‌نام';
+  async function saveNote(quiet = false) {
     const ed = S.editor;
     syncRich();
+    clearTimeout(saveTimer);
     if (!ed || !dirty()) return true;
     try {
       if (ed.id) {
@@ -903,12 +911,17 @@
         if (!isLive(note)) throw Error('این یادداشت دیگر نیست.');
         write(note, ed.crlf ? ed.draft.replace(/\n/g, '\r\n') : ed.draft);
       } else {
-        const note = await create((ed.folder ? ed.folder + '/' : '') + safeName(ed.title) + '.md', ed.draft);
+        // A note nobody named takes the words of its first line.
+        const first = plain(ed.draft.split('\n').find(line => plain(line)) || '');
+        const name = ed.title === DEFAULT_TITLE && first ? first : ed.title;
+        const note = await create((ed.folder ? ed.folder + '/' : '') + safeName(name) + '.md', ed.draft);
         ed.id = note.id;
         ed.title = stemOf(note.path);
+        const box = document.querySelector('.ed-title');
+        if (box) { box.value = ed.title; box.readOnly = true; }
       }
       ed.base = ed.draft;
-      flash('ذخیره شد · روی رایانه هم به‌روز می‌شود');
+      if (!quiet) flash('ذخیره شد · روی رایانه هم به‌روز می‌شود');
       updateEditor();
       return true;
     } catch (error) {
@@ -917,7 +930,11 @@
     }
   }
   function leaveEditor() { S.editor = null; S.sheet = null; render(); }
-  function edBack() { syncRich(); if (dirty()) set({ sheet: 'unsaved' }); else leaveEditor(); }
+  async function edBack() {
+    syncRich();
+    if (dirty() && !(await saveNote(true))) return;   // a failed save keeps you here, with the message
+    leaveEditor();
+  }
 
   // The new editor (the same TipTap page the desktop uses) is loaded on demand,
   // so the plain one stays instant and works if the script cannot load.
@@ -957,7 +974,7 @@
       if (S.editor !== ed || !box.isConnected) return;
       richApp = window.NotepadEditorEmbed.createApp(box, {
         tapOpensLinks: true,
-        changed: text => { ed.draft = text; updateEditor(); },
+        changed: text => { ed.draft = text; updateEditor(); scheduleSave(); },
         noteLink: openByTitle,
         dateRequested: () => richApp.cmd('today'),
         openUrl: url => { if (tg && tg.openLink) tg.openLink(url); else window.open(url, '_blank', 'noopener'); },
@@ -974,13 +991,7 @@
     });
     return box;
   }
-  function toggleRich() {
-    syncRich();
-    S.rich = !S.rich;
-    setPref('rich', S.rich ? '1' : '');
-    screenKey = '';
-    render();
-  }
+
   function viewEditor() {
     const ed = S.editor;
     const note = edNote();
@@ -990,28 +1001,24 @@
     });
     const area = S.rich ? viewRich(ed) : h('textarea', {
       class: 'ed-text', id: 'edText', value: ed.draft, spellcheck: false, placeholder: 'بنویس…',
-      oninput: event => { ed.draft = event.target.value; updateEditor(); },
+      oninput: event => { ed.draft = event.target.value; updateEditor(); scheduleSave(); },
     });
     return h('div', { class: 'editor', 'data-key': 'editor:' + (ed.id || 'new') },
       h('div', { class: 'ed-head' },
         h('button', { class: 'ed-back', title: 'برگشت', onclick: edBack }, ICON.back()),
-        h('div', { class: 'ed-titles' }, title, h('span', { class: 'ed-state', id: 'edState' })),
-        h('button', { class: 'ed-save', id: 'edSave', onclick: () => saveNote() }, 'ذخیره')),
-      h('div', { class: 'ed-meta' }, h('b', null, folderLabel(ed.folder)), h('span', { id: 'edMeta' },
-        [note ? ago(note.updated_at) : 'تازه', fa(ed.draft.split('\n').length) + ' خط'].filter(Boolean).join(' · ')),
-      h('button', { class: 'ed-switch', onclick: toggleRich }, S.rich ? 'ویرایشگر ساده' : 'ویرایشگر جدید')),
+        h('div', { class: 'ed-titles' }, title, h('span', { class: 'ed-state', id: 'edState' }))),
+      h('div', { class: 'ed-meta' }, h('b', null, folderLabel(ed.folder)),
+        h('span', { id: 'edMeta' }, note ? ago(note.updated_at) : 'تازه')),
       area);
   }
   function updateEditor() {
     const ed = S.editor;
     if (!ed) return;
     const isDirty = dirty();
-    const state = $('edState'), save = $('edSave'), meta = $('edMeta');
-    if (state) { state.textContent = isDirty ? 'ذخیره نشده' : 'ذخیره شد'; state.classList.toggle('dirty', isDirty); }
-    if (save) save.classList.toggle('dirty', isDirty);
+    const state = $('edState'), meta = $('edMeta');
+    if (state) { state.textContent = isDirty ? 'در حال ذخیره…' : 'ذخیره شد'; state.classList.toggle('dirty', isDirty); }
     const note = edNote();
-    if (meta) meta.textContent = [note ? ago(note.updated_at) : 'تازه', fa(ed.draft.split('\n').length) + ' خط']
-      .filter(Boolean).join(' · ');
+    if (meta) meta.textContent = note ? ago(note.updated_at) : 'تازه';
   }
   function insert(snippet, back) {
     const area = $('edText');
@@ -1308,6 +1315,11 @@
           flash('تازه شد · آخرین نسخه‌ها آمد');
         },
       }, 'بررسی الان'),
+      h('div', { class: 'col g8' }, h('span', { class: 'label' }, 'ظاهر'),
+        h('div', { class: 'seg' }, [['auto', 'خودکار'], ['light', 'روشن'], ['dark', 'تیره']].map(([key, label]) => h('button', {
+          class: S.theme === key ? 'on' : '',
+          onclick: () => { S.theme = key; setPref('theme', key); applyTheme(); renderSheet(true); },
+        }, label)))),
       inTelegram ? null : h('button', { class: 'btn-soft h48', onclick: signOut }, 'خروج از این مرورگر'));
   }
   function sheetConflict() {
@@ -1343,14 +1355,6 @@
           S.pick === 'current' ? 'نگه داشتن نسخه‌ی رایانه' : 'نگه داشتن نسخه‌ی تلگرام'),
         h('button', { class: 'btn-soft h48', onclick: () => settle('both') }, 'هر دو را نگه دار')));
   }
-  function sheetUnsaved() {
-    return h('div', { class: 'col' },
-      h('span', { class: 'sheet-title' }, 'تغییرات ذخیره نشده'),
-      h('span', { class: 'body-text' }, 'اگر بدون ذخیره برگردی، چیزهایی که نوشتی از دست می‌روند.'),
-      h('div', { class: 'row-flat' },
-        h('button', { class: 'btn-primary', onclick: async () => { if (await saveNote()) leaveEditor(); } }, 'ذخیره و برگشت'),
-        h('button', { class: 'btn-danger h48', onclick: leaveEditor }, 'دور بریز')));
-  }
   let sheetKey = '';
   function renderSheet(force) {
     const backdrop = $('sheet'), body = $('sheetBody');
@@ -1359,7 +1363,7 @@
     // The capture sheet holds a half-typed text; it is rebuilt only when it opens.
     if (S.sheet === 'capture' && key === sheetKey && !force) return;
     const build = { capture: sheetCapture, task: sheetTask, note: sheetNote, sync: sheetSync,
-      conflict: sheetConflict, unsaved: sheetUnsaved }[S.sheet];
+      conflict: sheetConflict }[S.sheet];
     const content = build(currentTasks);
     if (!content) { S.sheet = null; backdrop.classList.add('hidden'); sheetKey = ''; return; }
     if (key !== sheetKey) body.scrollTop = 0;
@@ -1434,7 +1438,7 @@
 
   const THEMES = { dark: { bg: '#191a1f', chrome: '#16171b' }, light: { bg: '#f1f3f7', chrome: '#ffffff' } };
   function applyTheme() {
-    const scheme = (tg && tg.colorScheme) || (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+    const scheme = S.theme !== 'auto' ? S.theme : (tg && tg.colorScheme) || (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
     document.documentElement.dataset.theme = scheme;
     const colours = THEMES[scheme] || THEMES.dark;
     document.querySelector('meta[name="theme-color"]').content = colours.chrome;
@@ -1491,6 +1495,7 @@
     load();
   }, 60000);
   document.addEventListener('visibilitychange', () => {
+    if (document.hidden && S.editor) { syncRich(); saveNote(true); }
     if (!document.hidden && !S.editor && S.sheet !== 'capture') load();
   });
 })();
