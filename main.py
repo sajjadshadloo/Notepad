@@ -256,6 +256,13 @@ def _finish_smoke_test(window, app, limit_seconds: float = 20.0):
 
     def check():
         tab = window.current_document()
+        if tab is not None and window._cfg.get("web_editor") and not tab.is_web:
+            # Asked for the new editor and did not get it: the build is missing
+            # the web engine or the page. Say so instead of passing quietly.
+            timer.stop()
+            log.error("Smoke test: the web editor was requested but is not available")
+            app.exit(4)
+            return
         waiting = tab is not None and tab.is_web and not tab.editor.is_ready()
         if not waiting:
             timer.stop()
