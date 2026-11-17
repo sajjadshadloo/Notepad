@@ -1438,7 +1438,7 @@
 
   const THEMES = { dark: { bg: '#191a1f', chrome: '#16171b' }, light: { bg: '#f1f3f7', chrome: '#ffffff' } };
   function applyTheme() {
-    const scheme = S.theme !== 'auto' ? S.theme : (tg && tg.colorScheme) || (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+    const scheme = S.theme !== 'auto' ? S.theme : (inTelegram && tg.colorScheme) || (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
     document.documentElement.dataset.theme = scheme;
     const colours = THEMES[scheme] || THEMES.dark;
     document.querySelector('meta[name="theme-color"]').content = colours.chrome;
@@ -1451,14 +1451,29 @@
     }
   }
   applyTheme();
+  // Follow the phone when it switches between light and dark.
+  if (window.matchMedia) {
+    const media = window.matchMedia('(prefers-color-scheme: light)');
+    (media.addEventListener ? media.addEventListener.bind(media, 'change') : media.addListener.bind(media))(applyTheme);
+  }
   // WebViews may resize only their visual viewport when the keyboard opens.
   // Keep the editor and its toolbar inside the actually visible height.
   function fitViewport() {
+    if (!inTelegram) {
+      // Installed or in a browser: the page fills the screen by itself (position
+      // fixed, safe areas in the CSS). Only an open keyboard shortens it.
+      const vv = window.visualViewport;
+      const root = document.documentElement.style;
+      if (vv && window.innerHeight - vv.height > 120) root.setProperty('--kb-height', vv.height + 'px');
+      else root.removeProperty('--kb-height');
+      return;
+    }
     const visible = (window.visualViewport && window.visualViewport.height) || window.innerHeight;
     const telegram = tg && tg.viewportHeight;
     const height = telegram > 0 ? Math.min(telegram, visible) : visible;
     if (height > 0) document.documentElement.style.setProperty('--app-height', height + 'px');
   }
+  if (!inTelegram) document.documentElement.classList.add('standalone');
   fitViewport();
   window.addEventListener('resize', fitViewport);
   if (window.visualViewport) window.visualViewport.addEventListener('resize', fitViewport);
