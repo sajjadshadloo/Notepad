@@ -32,6 +32,7 @@ a = Analysis(
         'PyQt6.QtQuick',
         'PyQt6.QtQuickWidgets',
         'PyQt6.QtPositioning',
+        'PyQt6.QtPrintSupport',
     ],
     hookspath=[],
     hooksconfig={},
@@ -78,11 +79,9 @@ UNUSED_BINARIES = (
     # Loaded only when a GPU driver is missing *and* something asks for GL;
     # QtWidgets paints through the raster engine and never does.
     'opengl32sw.dll',
-    # PDF, in both its forms. 4.0 removed the PDF and HTML exporters — the
-    # only thing here that ever printed — so neither the viewer module nor
-    # the print machinery has an importer left.
+    # The PDF viewer. 4.0 removed the PDF exporters and nothing imports it.
+    # (Qt6PrintSupport is kept: Qt WebEngine's widgets module links it.)
     'qt6pdf.dll',
-    'qt6printsupport.dll',
     # Not OpenSSL (libssl-3.dll, libcrypto-3.dll): 4.0 dropped it as unused,
     # but cloud sync talks HTTPS through Python's ssl module, which loads
     # those same DLLs. Without them urllib has no https handler at all and
