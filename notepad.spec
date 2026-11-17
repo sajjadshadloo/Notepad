@@ -27,6 +27,11 @@ a = Analysis(
         'PyQt6.QtWebChannel',
         'PyQt6.QtWebEngineCore',
         'PyQt6.QtWebEngineWidgets',
+        # Qt WebEngine imports these at load time.
+        'PyQt6.QtQml',
+        'PyQt6.QtQuick',
+        'PyQt6.QtQuickWidgets',
+        'PyQt6.QtPositioning',
     ],
     hookspath=[],
     hooksconfig={},
@@ -34,10 +39,7 @@ a = Analysis(
     # Qt ships far more than a text editor uses, and PyInstaller bundles every
     # module it can reach. None of these are imported anywhere in the app.
     excludes=[
-        'PyQt6.QtQml',
-        'PyQt6.QtQuick',
         'PyQt6.QtQuick3D',
-        'PyQt6.QtQuickWidgets',
         'PyQt6.QtWebSockets',
         'PyQt6.QtMultimedia',
         'PyQt6.QtMultimediaWidgets',
@@ -46,7 +48,6 @@ a = Analysis(
         'PyQt6.QtDBus',
         'PyQt6.QtBluetooth',
         'PyQt6.QtNfc',
-        'PyQt6.QtPositioning',
         'PyQt6.QtSensors',
         'PyQt6.QtSerialPort',
         'PyQt6.QtDesigner',

@@ -260,7 +260,10 @@ def _finish_smoke_test(window, app, limit_seconds: float = 20.0):
             # Asked for the new editor and did not get it: the build is missing
             # the web engine or the page. Say so instead of passing quietly.
             timer.stop()
-            log.error("Smoke test: the web editor was requested but is not available")
+            from ui import web_editor
+
+            log.error("Smoke test: the web editor was requested but is not available (%s)",
+                      web_editor.ENGINE_ERROR or "page missing")
             app.exit(4)
             return
         waiting = tab is not None and tab.is_web and not tab.editor.is_ready()

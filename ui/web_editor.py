@@ -30,8 +30,10 @@ try:  # Not every build ships the web engine; the old editor is the fallback.
     from PyQt6.QtWebEngineWidgets import QWebEngineView
 
     ENGINE = True
-except ImportError:  # pragma: no cover - depends on the installation
+    ENGINE_ERROR = ""
+except ImportError as error:  # pragma: no cover - depends on the installation
     ENGINE = False
+    ENGINE_ERROR = str(error)
 
 
 def bundle_dir() -> Path:
