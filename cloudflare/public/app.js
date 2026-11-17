@@ -1320,10 +1320,7 @@
           class: S.theme === key ? 'on' : '',
           onclick: () => { S.theme = key; setPref('theme', key); applyTheme(); renderSheet(true); },
         }, label)))),
-      inTelegram ? null : h('button', { class: 'btn-soft h48', onclick: signOut }, 'خروج از این مرورگر'),
-      h('small', { class: 'screen-info' }, 'نمایش ' + fa(innerWidth) + '×' + fa(innerHeight)
-        + ' · صفحه ' + fa(screen.width) + '×' + fa(screen.height)
-        + ' · ارتفاع برنامه ' + fa($('app').getBoundingClientRect().height | 0)));
+      inTelegram ? null : h('button', { class: 'btn-soft h48', onclick: signOut }, 'خروج از این مرورگر'));
   }
   function sheetConflict() {
     const c = conflicts.find(x => x.id === S.conflictId);
