@@ -44,3 +44,7 @@ cloudflare/.dev.vars*
 
 # Design hand-offs (kept locally, not in history)
 *.zip
+
+# Web editor
+editor-web/node_modules/
+editor-web/dist/

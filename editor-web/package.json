@@ -1,0 +1,22 @@
+{
+  "name": "notepad-plus-editor",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@tiptap/core": "3.34.0",
+    "@tiptap/starter-kit": "3.34.0",
+    "@tiptap/markdown": "3.34.0",
+    "@tiptap/extension-table": "3.34.0",
+    "@tiptap/extension-list": "3.34.0",
+    "@tiptap/extensions": "3.34.0",
+    "@tiptap/pm": "3.34.0"
+  },
+  "devDependencies": {
+    "vite": "8.3.8",
+    "happy-dom": "21.0.4"
+  }
+}
