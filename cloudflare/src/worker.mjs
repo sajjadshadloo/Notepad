@@ -24,9 +24,11 @@ export default {
       });
     }
     if (url.pathname === '/health' && request.method === 'GET') return new Response('ok');
+    // The bare address is what someone types or bookmarks; the app is at /app.
+    if (url.pathname === '/' && request.method === 'GET') return Response.redirect(url.origin + '/app', 302);
     if (url.pathname === '/app' && request.method === 'GET') return new Response(miniAppHtml, {
       headers: { 'Content-Type': 'text/html; charset=utf-8',
-        'Content-Security-Policy': "default-src 'none'; script-src 'self' https://telegram.org; style-src 'self'; font-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors https://web.telegram.org https://*.telegram.org" },
+        'Content-Security-Policy': "default-src 'none'; script-src 'self' https://telegram.org; style-src 'self'; font-src 'self'; connect-src 'self'; img-src 'self' data:; manifest-src 'self'; worker-src 'self'; base-uri 'none'; frame-ancestors https://web.telegram.org https://*.telegram.org" },
     });
     if (url.pathname === '/telegram/webhook-settings' && ['GET', 'POST'].includes(request.method)) {
       if (!env.DESKTOP_SYNC_KEY || !sameSecret(request.headers.get('Authorization'),

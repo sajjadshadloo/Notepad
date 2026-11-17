@@ -244,20 +244,113 @@
   const plain = s => s.replace(/^#+\s*/, '').replace(/^\s*- \[[ xX]\]\s*/, '').replace(/^\s*[*-]\s+/, '')
     .replace(/\[\[|\]\]/g, '').replace(/@[۰-۹0-9/-]+(\s[۰-۹0-9:]+)?(\s*↻)?/g, '').replace(/\*\*/g, '').trim();
 
+  // ------------------------------------------------ Browser sign-in (PWA)
+  // Inside Telegram the page is identified by initData. In a plain browser it
+  // holds a device key that is approved once through the bot, exactly as the
+  // desktop app is: the server only ever sees the key's hash while pairing.
+  const inTelegram = Boolean(tg && tg.initData);
+  const hex = bytes => Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+  const randomKey = () => hex(crypto.getRandomValues(new Uint8Array(32)));
+  const sha256Hex = async value => hex(new Uint8Array(
+    await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))));
+  let deviceKey = inTelegram ? '' : prefs('key', '');
+  let pairing = null;
+  let pairTimer = 0;
+  const needsPairing = () => !inTelegram && !deviceKey;
+  function deviceName() {
+    const ua = navigator.userAgent || '';
+    const os = /iPhone|iPad/.test(ua) ? 'iPhone' : /Android/.test(ua) ? 'Android'
+      : /Windows/.test(ua) ? 'Windows' : /Mac/.test(ua) ? 'Mac' : 'مرورگر';
+    return 'مرورگر · ' + os;
+  }
+  async function startPairing() {
+    clearTimeout(pairTimer);
+    const mine = { key: randomKey(), poll: randomKey(), id: '', code: '', url: '', error: '' };
+    pairing = mine;
+    render();
+    try {
+      const response = await fetch('/api/pairings', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ poll_key: mine.poll, key_hash: await sha256Hex(mine.key), name: deviceName() }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw Error(response.status === 429 ? 'درخواست زیاد است. کمی بعد دوباره امتحان کن.'
+          : 'ورود فعلاً ممکن نیست. کمی بعد دوباره امتحان کن.');
+      }
+      Object.assign(mine, { id: data.id, code: data.confirm_code, url: data.telegram_url });
+      if (pairing !== mine) return;
+      render();
+      pollPairing(mine);
+    } catch (error) {
+      if (pairing !== mine) return;
+      mine.error = error instanceof TypeError ? 'ارتباط برقرار نیست. دوباره امتحان کن.' : error.message;
+      render();
+    }
+  }
+  async function pollPairing(mine) {
+    if (pairing !== mine) return;
+    try {
+      const response = await fetch('/api/pairings/' + mine.id, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ poll_key: mine.poll }),
+      });
+      if (response.status === 410) { startPairing(); return; }   // ten minutes passed: a fresh code
+      const data = await response.json().catch(() => ({}));
+      if (response.ok && data.status === 'approved') {
+        deviceKey = mine.key;
+        setPref('key', mine.key);
+        pairing = null;
+        loaded = false;
+        loadError = '';
+        render();
+        load();
+        return;
+      }
+    } catch { /* offline for a moment: ask again */ }
+    pairTimer = setTimeout(() => pollPairing(mine), 3000);
+  }
+  function forgetKey() {
+    deviceKey = '';
+    setPref('key', '');
+    notes = [];
+    conflicts = [];
+    loaded = false;
+    S.editor = null;
+    S.sheet = null;
+    startPairing();
+  }
+  async function signOut() {
+    try {
+      const me = await api('/account');
+      if (me.device_id) await api('/devices/' + me.device_id, 'DELETE');
+    } catch { /* the key is forgotten here either way */ }
+    forgetKey();
+  }
+  function viewPairing() {
+    const p = pairing;
+    const steps = !p || (!p.code && !p.error) ? 'در حال آماده‌سازی…'
+      : p.error ? [h('span', null, p.error), h('button', { class: 'btn-primary solo', onclick: startPairing }, 'دوباره')]
+      : [h('span', null, 'این دستگاه را یک بار از ربات تلگرام تأیید کن.'),
+        h('div', { class: 'pair-code' }, fa(p.code)),
+        h('a', { class: 'btn-primary solo', href: p.url, target: '_blank', rel: 'noopener' }, 'باز کردن ربات در تلگرام'),
+        h('small', null, 'همین کد باید در پیام ربات هم باشد. بعد از تأیید، خودکار وارد می‌شوی.')];
+    return h('div', { class: 'state pair' }, h('b', null, 'ورود به نوت‌پد پلاس'), steps);
+  }
+
   // ----------------------------------------------------------------- API
   async function api(path, method = 'GET', body) {
     let response;
     try {
-      response = await fetch('/api' + path, {
-        method,
-        headers: { 'Content-Type': 'application/json', 'X-Telegram-Init-Data': (tg && tg.initData) || '' },
-        body: body ? JSON.stringify(body) : undefined,
-      });
+      const headers = { 'Content-Type': 'application/json', 'X-Telegram-Init-Data': (tg && tg.initData) || '' };
+      if (deviceKey) headers.Authorization = 'Bearer ' + deviceKey;
+      response = await fetch('/api' + path, { method, headers, body: body ? JSON.stringify(body) : undefined });
     } catch {
       throw Error('ارتباط برقرار نیست. دوباره امتحان کن.');
     }
     let data = {};
     try { data = await response.json(); } catch { /* an empty body */ }
+    if (response.status === 401 && deviceKey) forgetKey();   // revoked elsewhere: sign in again
     if (!response.ok) {
       const error = Error(response.status === 401 ? 'در بات /start بزن و دفترچه را از همان‌جا باز کن.'
         : response.status === 409 ? (data.error === 'path_exists' ? 'فایلی با این نام هست.'
@@ -275,6 +368,7 @@
   let writing = 0;
   let reloadAfterWrites = false;
   async function load() {
+    if (needsPairing()) return;
     if (writing) { reloadAfterWrites = true; return; }
     try {
       const [list, open] = await Promise.all([api('/notes'), api('/conflicts').catch(() => ({ conflicts: [] }))]);
@@ -1148,7 +1242,8 @@
           await load();
           flash('تازه شد · آخرین نسخه‌ها آمد');
         },
-      }, 'بررسی الان'));
+      }, 'بررسی الان'),
+      inTelegram ? null : h('button', { class: 'btn-soft h48', onclick: signOut }, 'خروج از این مرورگر'));
   }
   function sheetConflict() {
     const c = conflicts.find(x => x.id === S.conflictId);
@@ -1218,7 +1313,7 @@
     badge.textContent = fa(late);
     badge.classList.toggle('hidden', !late);
     document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('on', b.dataset.tab === S.tab));
-    $('nav').classList.toggle('hidden', Boolean(S.editor));
+    $('nav').classList.toggle('hidden', Boolean(S.editor) || needsPairing());
     $('edbar').classList.toggle('hidden', !S.editor);
     $('scroll').classList.toggle('editing', Boolean(S.editor));
     $('syncDot').className = 'sync-dot ' + syncSummary().tone;
@@ -1231,6 +1326,12 @@
     currentTasks = allTasks().map(describe);
     renderChrome();
     const screen = $('screen');
+    if (needsPairing()) {
+      screenKey = 'pairing';
+      screen.replaceChildren(viewPairing());
+      renderSheet();
+      return;
+    }
     if (!loaded) {
       screenKey = 'state';
       screen.replaceChildren(h('div', { class: 'state' }, loadError
@@ -1308,9 +1409,14 @@
     }, 1500);
   }
 
+  // Outside Telegram there is no close button to press and a service worker keeps the shell.
+  if (!inTelegram) {
+    $('closeApp').style.visibility = 'hidden';
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+  }
   render();
   loadPins();
-  load();
+  if (needsPairing()) startPairing(); else load();
   setInterval(() => {
     // The clock moves the "now" line and the next task; the files may have
     // changed on the desktop. Neither may disturb something being typed.

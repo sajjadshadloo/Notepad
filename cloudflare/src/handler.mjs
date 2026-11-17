@@ -34,7 +34,7 @@ export async function routeTelegramUpdate(update, env, origin) {
     const token = start[1].slice(5);
     const pairing = await presentPairing(env, token, telegramId);
     return pairing ? { chatId: sender.id,
-      text: `اتصال رایانهٔ «${pairing.name}»\nکد تطبیق: ${pairing.confirm_code}\nاگر این کد در برنامهٔ خودت دیده می‌شود، اتصال را تأیید کن.`,
+      text: `اتصال دستگاه «${pairing.name}»\nکد تطبیق: ${pairing.confirm_code}\nاگر این کد در برنامهٔ خودت دیده می‌شود، اتصال را تأیید کن.`,
       replyMarkup: { inline_keyboard: [[{ text: 'تأیید اتصال این رایانه', callback_data: 'pair:approve:' + token }]] } }
       : { chatId: sender.id, text: 'لینک اتصال معتبر نیست یا منقضی شده است. از برنامه دوباره شروع کن.' };
   }

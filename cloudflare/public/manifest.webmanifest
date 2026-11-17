@@ -1,0 +1,17 @@
+{
+  "name": "نوت‌پد پلاس",
+  "short_name": "نوت‌پد",
+  "description": "یادداشت‌ها و کارهایت، همه‌جا",
+  "lang": "fa",
+  "dir": "rtl",
+  "start_url": "/app",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#16171b",
+  "theme_color": "#16171b",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
