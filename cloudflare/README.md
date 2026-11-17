@@ -2,7 +2,6 @@
 
 Worker: `https://notepad-plus-bot.sajadshadlloo23.workers.dev`.
 The 4.4.0 beta supports separate accounts on one Worker/D1.
-See [rollout and verification](../docs/MULTI-USER-IMPLEMENTATION.md).
 
 ## Identity and data
 

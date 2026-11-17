@@ -16,8 +16,11 @@ python -m pytest -q
 ساخت فایل اجرایی و نصاب؛ مرحلهٔ دوم به Inno Setup نیاز دارد:
 
 ```powershell
-python -m PyInstaller notepad.spec --noconfirm
-ISCC.exe installer.iss
+python tools/build_release.py
 ```
+
+این اسکریپت **فقط از کد کامیت‌شده** می‌سازد. اگر تغییر کامیت‌نشده‌ای باشد، کار را
+متوقف می‌کند، چون نصب‌کننده باید دقیقاً یک کامیت مشخص باشد. پیش از ساخت، آزمون‌ها
+اجرا می‌شوند (`--no-tests` برای رد شدن از آن‌ها).
 
 کلیدهای سرویس و دادهٔ واقعی کاربر برای ساخت برنامه لازم نیستند. [نسخه و سورس وابستگی‌ها](DEPENDENCY-SOURCES.txt)
