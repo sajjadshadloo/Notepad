@@ -869,7 +869,7 @@
   function renderEdbar() {
     const bar = $('edbar');
     const [y, m, d] = d2j(T);
-    const tools = [['☐', 'کار', '\n- [ ] ', 0], ['@', 'تاریخ', ' @' + fa(y + '/' + pad(m) + '/' + pad(d)), 0],
+    const tools = [['☐', 'کار', '\n- [ ] ', 0], ['•', 'لیست', '\n- ', 0], ['1.', 'شماره', '\n1. ', 0], ['@', 'تاریخ', ' @' + fa(y + '/' + pad(m) + '/' + pad(d)), 0],
       ['[[', 'پیوند', '[[]]', 2], ['#', 'عنوان', '\n## ', 0], ['B', 'پررنگ', '****', 2]];
     bar.replaceChildren(...tools.map(([glyph, title, snippet, back]) => h('button', {
       title,
