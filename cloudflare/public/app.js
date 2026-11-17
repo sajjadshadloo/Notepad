@@ -1463,22 +1463,14 @@
   // Keep the editor and its toolbar inside the actually visible height.
   function fitViewport() {
     if (!inTelegram) {
-      // Installed or in a browser: the page is the whole screen, edge to edge.
-      // iPhone's installed apps report a window shorter than the screen (the
-      // status bar is subtracted), so there the tallest of the viewport units
-      // is the true height. Only an open keyboard shortens it.
+      // Installed or in a browser: the frame is pinned to the screen's edges
+      // by the CSS. Only an open keyboard shortens it.
       const vv = window.visualViewport;
       const root = document.documentElement.style;
-      if (vv && window.innerHeight - vv.height > 120) root.setProperty('--kb-height', vv.height + 'px');
+      const keyboard = Boolean(vv && window.innerHeight - vv.height > 120);
+      if (keyboard) root.setProperty('--kb-height', vv.height + 'px');
       else root.removeProperty('--kb-height');
-      const installed = navigator.standalone || (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
-      if (installed) {
-        const probe = $('probe');
-        const heights = [window.innerHeight, ...Array.from(probe.children, el => el.offsetHeight)];
-        root.setProperty('--screen-height', Math.max(...heights) + 'px');
-      } else {
-        root.removeProperty('--screen-height');
-      }
+      document.documentElement.classList.toggle('kb', keyboard);
       return;
     }
     const visible = (window.visualViewport && window.visualViewport.height) || window.innerHeight;

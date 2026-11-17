@@ -18,12 +18,11 @@ textarea,input{font-family:Vazirmatn,sans-serif}
 .hidden{display:none!important}
 .flex1{flex:1;min-width:0}
 
-.standalone .app{position:fixed;top:0;left:0;right:0;margin:0 auto;height:var(--kb-height,var(--screen-height,100dvh))}
-.probe{position:fixed;top:0;left:0;width:0;visibility:hidden;pointer-events:none}
-.probe i{display:block;width:0}
-.probe i:nth-child(1){height:100vh}
-.probe i:nth-child(2){height:100lvh}
-.probe i:nth-child(3){height:100dvh}
+/* Outside Telegram: pinned to all four edges, never a percentage height. On an
+   installed iPhone app 100% is shorter than the screen; top:0 + bottom:0 is not. */
+.standalone .app{position:fixed;top:0;bottom:0;left:0;right:0;margin:0 auto;height:auto}
+.standalone.kb .app{bottom:auto;height:var(--kb-height)}
+.standalone,.standalone body{background:var(--chrome)}
 .screen-info{color:var(--muted);font-size:11px;text-align:center;direction:rtl}
 .app{position:relative;display:flex;flex-direction:column;height:100vh;height:var(--app-height,var(--tg-viewport-height,100dvh));max-width:640px;margin:0 auto;overflow:hidden;background:var(--bg);color:var(--ink)}
 
