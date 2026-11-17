@@ -8,7 +8,7 @@ from pathlib import Path
 
 from core.startup_trace import ENABLED as _TRACE, elapsed_ms, mark as _mark, marks
 
-from PyQt6.QtCore import QtMsgType, QTimer, qInstallMessageHandler
+from PyQt6.QtCore import QCoreApplication, Qt, QtMsgType, QTimer, qInstallMessageHandler
 from PyQt6.QtGui import QFont, QIcon
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
@@ -138,6 +138,9 @@ def main() -> int:
         # GDI backend starts without that font-service wait. Explicit user
         # platform settings (including offscreen tests) still take precedence.
         os.environ.setdefault("QT_QPA_PLATFORM", "windows:fontengine=gdi")
+    # The web editor (Qt WebEngine) is imported later, after the app exists;
+    # Qt requires this to be declared before the application is created.
+    QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
     app = QApplication(sys.argv)
     app.setApplicationName("Notepad Plus")
     app.setApplicationDisplayName("Notepad Plus")

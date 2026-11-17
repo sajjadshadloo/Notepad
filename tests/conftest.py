@@ -9,7 +9,8 @@ from PyQt6.QtWidgets import QApplication
 
 @pytest.fixture(scope="session")
 def qapp():
-    app = QApplication.instance() or QApplication([])
+    # A real argv[0]: Qt WebEngine cannot start without one.
+    app = QApplication.instance() or QApplication(["notepad-tests"])
     app.setApplicationName("NotepadTests")
     app.setOrganizationName("Sajjad")
     return app

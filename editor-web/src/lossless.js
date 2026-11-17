@@ -280,6 +280,11 @@ function writeList(markdown, state, chunk, group) {
 
 /** Write the editor's document back as the note's text. */
 export function save(markdown, state, json) {
+  return saveDetailed(markdown, state, json).text;
+}
+
+/** Like save, and says on which file line each top-level node starts. */
+export function saveDetailed(markdown, state, json) {
   const nodes = [...(json.content || [])];
   // TipTap keeps an empty paragraph after a final table or list so the
   // cursor has somewhere to go. It is the editor's, not the user's.
@@ -291,23 +296,28 @@ export function save(markdown, state, json) {
   const pieces = [];
   for (const [key, group] of groups(nodes)) {
     const chunk = key != null ? state.chunks[Number(key)] : null;
+    let piece;
     if (chunk && state.original.get(key) === canon(group)) {
-      pieces.push({ body: chunk.body, term: chunk.term });
+      piece = { body: chunk.body, term: chunk.term };
     } else if (chunk && chunk.itemsMatch && group.every((n) => LIST_TYPES.includes(n.type))) {
-      pieces.push({ body: writeList(markdown, state, chunk, group), term: chunk.term });
+      piece = { body: writeList(markdown, state, chunk, group), term: chunk.term };
     } else {
-      pieces.push({ body: serializeNodes(markdown, group, state.eol), term: null });
+      piece = { body: serializeNodes(markdown, group, state.eol), term: null };
     }
+    piece.count = group.length;
+    pieces.push(piece);
   }
   let text = '';
+  const starts = [];
+  let line = 0;
   pieces.forEach((piece, i) => {
     const last = i === pieces.length - 1;
+    for (let k = 0; k < piece.count; k += 1) starts.push(line);
     text += piece.body;
-    if (!last) text += piece.term || state.eol;
-    else if (state.endsWithNewline) text += piece.term || state.eol;
+    line += (piece.body.match(/\r\n|\n|\r/g) || []).length;
+    if (!last || state.endsWithNewline) { text += piece.term || state.eol; line += 1; }
   });
   // An untouched empty note stays empty, not one blank line.
-  if (pieces.length === 1 && pieces[0].body === '' && !state.chunks.length) return '';
-  return text;
+  if (pieces.length === 1 && pieces[0].body === '' && !state.chunks.length) text = '';
+  return { text, starts };
 }
-

@@ -102,7 +102,7 @@ log = logging.getLogger(__name__)
 TAB_DOT_SIZE = 6
 
 APP_TITLE = "Notepad Plus"
-APP_VERSION = "4.7.3"
+APP_VERSION = "4.8.0"
 
 # Line endings, as characters rather than an escape.
 NEWLINE_CHARS = chr(13) + chr(10)
@@ -619,9 +619,8 @@ class MainWindow(QMainWindow):
         self.heading_actions = [
             self._action(
                 f"Heading &{level}",
-                lambda checked=False, l=level: self._transform_selected_lines(
-                    lambda line: toggle_heading(line, l)
-                ),
+                lambda checked=False, l=level: self._web_command(f"h{l}")
+                or self._transform_selected_lines(lambda line: toggle_heading(line, l)),
                 f"Ctrl+{level}",
             )
             for level in (1, 2, 3)
@@ -629,17 +628,20 @@ class MainWindow(QMainWindow):
         self.bold_action = self._action("&Bold", self.toggle_bold, "Ctrl+B")
         self.bullet_action = self._action(
             "&Bullet List",
-            lambda: self._transform_selected_lines(toggle_bullet),
+            lambda: self._web_command("bullet")
+            or self._transform_selected_lines(toggle_bullet),
             "Ctrl+Shift+8",
         )
         self.numbered_action = self._action(
             "&Numbered List",
-            lambda: self._transform_selected_lines(toggle_numbered),
+            lambda: self._web_command("ordered")
+            or self._transform_selected_lines(toggle_numbered),
             "Ctrl+Shift+7",
         )
         self.todo_action = self._action(
             "&To-Do List",
-            lambda: self._transform_selected_lines(toggle_todo),
+            lambda: self._web_command("task")
+            or self._transform_selected_lines(toggle_todo),
             "Ctrl+Shift+9",
         )
         self.toggle_done_action = self._action(
@@ -1089,7 +1091,11 @@ class MainWindow(QMainWindow):
     def insert_table(self):
         """The table button: an empty grid at the cursor, ready to type in."""
         tab = self.current_document()
-        if tab:
+        if not tab:
+            return
+        if tab.is_web:
+            tab.editor.command("table")
+        else:
             tab.editor.tables.insert_table()
 
     def show_stamp_picker(self):
@@ -1153,6 +1159,8 @@ class MainWindow(QMainWindow):
                 self._transform_selected_lines(
                     lambda text: text[:span_match.start()] + stamp_str + text[span_match.end():]
                 )
+            elif tab.is_web:
+                editor.insert_text(stamp_str + " ")
             elif not line.strip():
                 cursor.beginEditBlock()
                 cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
@@ -1197,6 +1205,7 @@ class MainWindow(QMainWindow):
             if remembered:
                 kwargs["direction_mode"] = remembered
         tab = DocumentTab(
+            web=bool(self._cfg.get("web_editor", False)),
             font_family=self._cfg.get("font_family_latin", "Inter"),
             font_family_persian=self._cfg.get("font_family_persian", "Vazirmatn"),
             font_size=self._effective_font_size(),
@@ -1216,6 +1225,8 @@ class MainWindow(QMainWindow):
         tab.editor.zoom_requested.connect(self.change_zoom)
         tab.editor.direction_changed.connect(self._editor_direction_changed)
         tab.editor.link_clicked.connect(self.open_link_target)
+        if tab.is_web:
+            tab.editor.date_requested.connect(self.stamp_action.trigger)
         tab.editor.set_link_names(lambda: self._links_index().titles())
         tab.editor.textChanged.connect(self._links_timer.start)
         if getattr(self, "_focus", False):
@@ -1432,6 +1443,7 @@ class MainWindow(QMainWindow):
         self.settings_overlay.palette_changed.connect(self._set_palette)
         self.settings_overlay.font_size_changed.connect(self._set_font_size)
         self.settings_overlay.line_numbers_changed.connect(self._set_line_numbers)
+        self.settings_overlay.web_editor_changed.connect(self._set_web_editor)
         self.settings_overlay.full_width_changed.connect(self._set_full_width)
         self.settings_overlay.startup_changed.connect(self._set_run_at_startup)
         self.settings_overlay.tray_changed.connect(self._set_close_to_tray)
@@ -1511,6 +1523,7 @@ class MainWindow(QMainWindow):
             "palette": self._cfg.get("accent_palette", "graphite"),
             "font_size": self._cfg.get("font_size", 14.5),
             "line_numbers": self._cfg.get("show_line_numbers", True),
+            "web_editor": self._cfg.get("web_editor", False),
             "full_width": self._cfg.get("full_width", True),
             "startup": _run_at_startup_enabled(),
             "tray": self._cfg.get("close_to_tray", True),
@@ -1528,6 +1541,16 @@ class MainWindow(QMainWindow):
         self._cfg["font_size"] = size
         settings_manager.save(self._cfg)
         self._apply_editor_fonts()
+
+    def _set_web_editor(self, on: bool):
+        """Notes opened from now on use the chosen editor; open ones keep theirs."""
+        self._cfg["web_editor"] = on
+        settings_manager.save(self._cfg)
+        self.statusBar().showMessage(
+            "ویرایشگر جدید از یادداشت بعدی که باز کنی فعال می‌شود." if on
+            else "ویرایشگر قبلی از یادداشت بعدی که باز کنی فعال می‌شود.",
+            5000,
+        )
 
     def _set_line_numbers(self, on: bool):
         self.line_numbers_action.setChecked(on)
@@ -2126,6 +2149,7 @@ class MainWindow(QMainWindow):
             if tab.encoding in self.encoding_actions:
                 self.encoding_actions[tab.encoding].setChecked(True)
             self._document_state_changed(tab)
+            self.format_bar.set_web_mode(tab.is_web)
             tab.editor.setFocus()
         else:
             self.setWindowTitle(APP_TITLE)
@@ -2270,9 +2294,23 @@ class MainWindow(QMainWindow):
             edit.endEditBlock()
         editor.setFocus()
 
+    def _web_command(self, name: str) -> bool:
+        """Run a formatting command in the web editor, if that is what is open.
+
+        True when it handled the command; False means the caller does the
+        work the old way, on the text.
+        """
+        tab = self.current_document()
+        if tab is not None and tab.is_web:
+            tab.editor.command(name)
+            return True
+        return False
+
     def toggle_bold(self):
         """Toggle **bold** around the selection (or the word under the
         cursor), Word-style: pressing it again removes the markers."""
+        if self._web_command("bold"):
+            return
         tab = self.current_document()
         if not tab:
             return
@@ -2374,7 +2412,8 @@ class MainWindow(QMainWindow):
         for index in range(self.tabs.count()):
             tab = self.tabs.widget(index)
             tab.apply_font(font)
-            tab.highlighter.rehighlight()
+            if tab.highlighter is not None:
+                tab.highlighter.rehighlight()
 
     def toggle_line_numbers(self, checked: bool):
         self._cfg["show_line_numbers"] = checked
@@ -2547,7 +2586,7 @@ class MainWindow(QMainWindow):
         self.document_tab_bar.refresh_close_icons()
         for index in range(self.tabs.count()):
             tab = self.tabs.widget(index)
-            tab.highlighter.rehighlight()
+            tab.refresh_theme()
             self.tabs.setTabIcon(index, self._dot_icon(tab.modified))
 
     def show_settings(self, section: str = "look"):

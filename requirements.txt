@@ -3,6 +3,9 @@
 PyQt6==6.11.0
 PyQt6-Qt6==6.11.1
 PyQt6-sip==13.11.1
+# The new editor runs in Qt WebEngine.
+PyQt6-WebEngine==6.11.0
+PyQt6-WebEngine-Qt6==6.11.2
 
 # Build and test only — not imported by the application at runtime.
 pyinstaller==6.21.0

@@ -32,6 +32,18 @@ def dirty_files() -> list[str]:
     return [line for line in run("git", "status", "--porcelain").splitlines() if line]
 
 
+def build_editor() -> None:
+    """Build the TipTap page the app bundles (editor-web/dist is not committed)."""
+    folder = ROOT / "editor-web"
+    npm = shutil.which("npm") or shutil.which("npm.cmd")
+    if npm is None:
+        raise SystemExit("Node.js (npm) is needed to build the editor page.")
+    if not (folder / "node_modules").is_dir():
+        subprocess.run([npm, "ci", "--no-fund", "--no-audit"], cwd=folder, check=True)
+    subprocess.run([npm, "test"], cwd=folder, check=True)
+    subprocess.run([npm, "run", "build"], cwd=folder, check=True)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--no-tests", action="store_true")
@@ -50,6 +62,8 @@ def main() -> int:
 
     if not options.no_tests:
         subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=ROOT, check=True)
+
+    build_editor()
 
     subprocess.run(
         [sys.executable, "-m", "PyInstaller", "notepad.spec", "--noconfirm"],

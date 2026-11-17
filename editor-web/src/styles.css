@@ -1,0 +1,146 @@
+/* The editor page. Colours arrive from the host as CSS variables (--bg,
+   --text …); the values below are only what shows before it sends them. */
+:root {
+  --bg: #191a1f;
+  --chrome: #1d1f24;
+  --text: #e8e9ec;
+  --muted: #969aa5;
+  --border: #2f323a;
+  --hover: #2a2c33;
+  --accent: #6cb6ff;
+  --danger: #ff7a85;
+  --code: #26282f;
+  --font: "Vazirmatn", "Inter", system-ui, sans-serif;
+  --size: 15px;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); overflow: hidden; }
+
+#app {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font);
+  font-size: var(--size);
+  background: var(--bg);
+}
+
+/* Toolbar: a quiet row of icon buttons, like the reference */
+.toolbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 8px 12px;
+  background: var(--chrome);
+  border-bottom: 1px solid var(--border);
+  direction: ltr;
+  flex-wrap: wrap;
+}
+.tb-group { display: flex; gap: 2px; align-items: center; }
+.tb-sep { width: 1px; height: 20px; margin: 0 6px; background: var(--border); }
+.tb {
+  width: 32px; height: 32px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; color: var(--muted);
+  border: 0; border-radius: 8px; cursor: pointer; padding: 0;
+  transition: background .12s, color .12s;
+}
+.tb:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+.tb.active { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+.tb:disabled { opacity: .35; cursor: default; }
+.tb-text { font-size: 12.5px; font-weight: 700; font-family: var(--font); }
+.tb-table-only { display: none; }
+.toolbar.in-table .tb-table-only { display: flex; }
+.toolbar.in-table .tb-sep.tb-table-only { display: block; }
+
+/* The page */
+.scroller { flex: 1; min-height: 0; overflow-y: auto; }
+.page { margin: 0 auto; padding: 28px 40px 120px; }
+#app[data-width="column"] .page { max-width: 860px; }
+
+.ProseMirror { outline: none; min-height: 60vh; line-height: 2; caret-color: var(--accent); }
+.ProseMirror p, .ProseMirror li, .ProseMirror h1, .ProseMirror h2, .ProseMirror h3,
+.ProseMirror td, .ProseMirror th { margin: 0; }
+
+/* Direction: whole document right-to-left, or each paragraph by its own words */
+#app[data-direction="rtl"] .ProseMirror { direction: rtl; text-align: right; }
+#app[data-direction="ltr"] .ProseMirror { direction: ltr; text-align: left; }
+#app[data-direction="auto"] .ProseMirror,
+#app:not([data-direction]) .ProseMirror { direction: rtl; }
+#app[data-direction="auto"] .ProseMirror p, #app[data-direction="auto"] .ProseMirror h1,
+#app[data-direction="auto"] .ProseMirror h2, #app[data-direction="auto"] .ProseMirror h3,
+#app[data-direction="auto"] .ProseMirror li > p { unicode-bidi: plaintext; text-align: start; }
+
+.ProseMirror h1 { font-size: 1.9em; font-weight: 700; line-height: 1.7; margin-top: .4em; }
+.ProseMirror h2 { font-size: 1.35em; font-weight: 700; line-height: 1.8; margin-top: .3em; }
+.ProseMirror h3 { font-size: 1.1em; font-weight: 700; margin-top: .2em; }
+.ProseMirror strong { font-weight: 700; }
+.ProseMirror a { color: var(--accent); text-decoration: none; }
+.ProseMirror code { font-family: Consolas, "Cascadia Mono", monospace; font-size: .9em; background: var(--code); padding: 1px 6px; border-radius: 5px; direction: ltr; unicode-bidi: embed; }
+.ProseMirror pre { background: var(--code); border-radius: 10px; padding: 12px 16px; direction: ltr; text-align: left; overflow-x: auto; }
+.ProseMirror pre code { background: none; padding: 0; }
+.ProseMirror blockquote { margin: 4px 0; padding: 0 14px; border-inline-start: 3px solid var(--border); color: var(--muted); }
+.ProseMirror hr { border: 0; border-top: 1px solid var(--border); margin: 14px 0; }
+
+/* A blank line is a short gap, like a line in Notepad */
+.ProseMirror p:has(> br.ProseMirror-trailingBreak:only-child) { line-height: 1.2; }
+
+/* Lists: the marker sits on the reading side */
+.ProseMirror ul, .ProseMirror ol { margin: 0; padding-inline-start: 1.6em; }
+.ProseMirror li::marker { color: var(--accent); }
+
+/* Tasks: a real checkbox */
+.ProseMirror ul[data-type="taskList"] { list-style: none; padding-inline-start: 0; }
+.ProseMirror ul[data-type="taskList"] > li { display: flex; align-items: flex-start; gap: 10px; }
+.ProseMirror ul[data-type="taskList"] > li > label { flex: none; margin-top: .72em; line-height: 0; user-select: none; }
+.ProseMirror ul[data-type="taskList"] > li > div { flex: 1; min-width: 0; }
+.ProseMirror ul[data-type="taskList"] > li input[type="checkbox"] {
+  appearance: none; -webkit-appearance: none; margin: 0; cursor: pointer;
+  width: 17px; height: 17px; border-radius: 5px; border: 1.5px solid var(--muted);
+  display: inline-grid; place-content: center; background: transparent;
+}
+.ProseMirror ul[data-type="taskList"] > li input[type="checkbox"]:hover { border-color: var(--accent); }
+.ProseMirror ul[data-type="taskList"] > li input[type="checkbox"]:checked { background: var(--accent); border-color: var(--accent); }
+.ProseMirror ul[data-type="taskList"] > li input[type="checkbox"]:checked::after {
+  content: ""; width: 9px; height: 5px; border-left: 2px solid var(--bg); border-bottom: 2px solid var(--bg);
+  transform: translateY(-1px) rotate(-45deg);
+}
+.ProseMirror ul[data-type="taskList"] > li[data-checked="true"] > div { color: var(--muted); text-decoration: line-through; }
+
+/* Tables: a real grid */
+.ProseMirror .tableWrapper { overflow-x: auto; margin: 8px 0; }
+.ProseMirror table { border-collapse: separate; border-spacing: 0; width: 100%; table-layout: fixed; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.ProseMirror td, .ProseMirror th { border-inline-end: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 6px 12px; vertical-align: top; line-height: 1.9; position: relative; min-width: 70px; }
+.ProseMirror th { background: color-mix(in srgb, var(--hover) 70%, transparent); font-weight: 700; text-align: start; }
+.ProseMirror tr:last-child td { border-bottom: 0; }
+.ProseMirror td:last-child, .ProseMirror th:last-child { border-inline-end: 0; }
+.ProseMirror .selectedCell::after { content: ""; position: absolute; inset: 0; background: color-mix(in srgb, var(--accent) 18%, transparent); pointer-events: none; }
+.ProseMirror .column-resize-handle { position: absolute; inset-inline-end: -2px; top: 0; bottom: 0; width: 4px; background: var(--accent); pointer-events: none; }
+
+/* Chips: date stamps and [[note]] links, drawn over the plain text */
+.chip { border-radius: 999px; padding: 1px 8px; font-size: .88em; }
+.chip-date { border: 1px solid var(--accent); color: var(--accent); }
+.chip-date.chip-late { border-color: var(--danger); color: var(--danger); }
+.chip-note { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
+
+/* Placeholder */
+.ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder); color: var(--muted); float: inline-start; height: 0; pointer-events: none;
+}
+
+/* Link popover */
+.popover {
+  position: fixed; top: 52px; left: 50%; transform: translateX(-50%); z-index: 10;
+  display: flex; gap: 8px; padding: 8px; background: var(--chrome);
+  border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 8px 28px rgba(0,0,0,.35);
+}
+.popover input { width: 280px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; outline: none; font: inherit; }
+.popover input:focus { border-color: var(--accent); }
+.popover button { background: var(--accent); color: var(--bg); border: 0; border-radius: 8px; padding: 0 14px; font: inherit; font-weight: 600; cursor: pointer; }
+
+::selection { background: color-mix(in srgb, var(--accent) 35%, transparent); }
+::-webkit-scrollbar { width: 10px; }
+::-webkit-scrollbar-thumb { background: var(--hover); border-radius: 6px; border: 2px solid var(--bg); }

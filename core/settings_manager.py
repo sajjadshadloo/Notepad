@@ -52,6 +52,8 @@ DEFAULTS = {
     "show_line_numbers": True,
     # Text runs to the window edge (like Notepad); off keeps an 860px column.
     "full_width": True,
+    # The TipTap editor instead of the original one (opt-in while it settles).
+    "web_editor": False,
     # Documents open right-to-left. "auto" decides per paragraph, which reads
     # as the document jumping sides while you write; "rtl" keeps the whole
     # document on one side until you say otherwise. Code blocks stay LTR

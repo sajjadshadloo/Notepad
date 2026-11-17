@@ -48,6 +48,8 @@ class DocumentTab(QWidget):
         # Where this document will be written the first time it is saved,
         # for a note that has a name in mind but no file yet.
         pending_path: str | None = None,
+        # The TipTap editor (ui/web_editor.py) instead of the QTextEdit one.
+        web: bool = False,
         parent=None,
     ):
         super().__init__(parent)
@@ -62,11 +64,24 @@ class DocumentTab(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        self.editor = SmartEditor()
-        self.editor.setFont(editor_font(font_family, font_family_persian, font_size))
-        self.editor.set_direction_mode(direction_mode)
-        self.highlighter = MarkdownHighlighter(self.editor)
-        self.editor.markdown_highlighter = self.highlighter
+        from ui import web_editor
+
+        self.is_web = bool(web and web_editor.available())
+        if self.is_web:
+            from ui.styles import current_palette
+
+            self.editor = web_editor.WebEditor()
+            self.highlighter = None
+            self.editor.load_fonts(web_editor.ASSETS_FONTS)
+            self.editor.setFont(editor_font(font_family, font_family_persian, font_size))
+            self.editor.set_direction_mode(direction_mode)
+            self.editor.apply_palette(current_palette())
+        else:
+            self.editor = SmartEditor()
+            self.editor.setFont(editor_font(font_family, font_family_persian, font_size))
+            self.editor.set_direction_mode(direction_mode)
+            self.highlighter = MarkdownHighlighter(self.editor)
+            self.editor.markdown_highlighter = self.highlighter
         layout.addWidget(self.editor)
         self._focus_layout = False
 
@@ -91,7 +106,17 @@ class DocumentTab(QWidget):
 
     @property
     def text(self) -> str:
-        return self.editor.toPlainText()
+        # The page may hold keystrokes it has not reported yet.
+        return self.editor.fresh_text() if self.is_web else self.editor.toPlainText()
+
+    def refresh_theme(self):
+        """After a theme change: the editor re-reads the app's colours."""
+        if self.is_web:
+            from ui.styles import current_palette
+
+            self.editor.apply_palette(current_palette())
+        else:
+            self.highlighter.rehighlight()
 
     def apply_font(self, font: QFont):
         self.editor.setFont(font)

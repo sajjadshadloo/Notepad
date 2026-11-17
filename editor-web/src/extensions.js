@@ -6,7 +6,9 @@ import Link from '@tiptap/extension-link';
 import HardBreak from '@tiptap/extension-hard-break';
 import { TaskList, TaskItem } from '@tiptap/extension-list';
 import { TableKit } from '@tiptap/extension-table';
+import { Placeholder } from '@tiptap/extensions';
 import { SourceKey } from './lossless.js';
+import { Chips } from './chips.js';
 
 export function createExtensions() {
   return [
@@ -31,5 +33,7 @@ export function createExtensions() {
     TaskItem.configure({ nested: true }),
     TableKit,
     SourceKey,
+    Chips,
+    Placeholder.configure({ placeholder: 'بنویس…' }),
   ];
 }

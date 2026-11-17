@@ -870,6 +870,7 @@ class SettingsPanel(Overlay):
     font_size_changed = pyqtSignal(float)
     line_numbers_changed = pyqtSignal(bool)
     full_width_changed = pyqtSignal(bool)
+    web_editor_changed = pyqtSignal(bool)
     startup_changed = pyqtSignal(bool)
     tray_changed = pyqtSignal(bool)
     folder_change_requested = pyqtSignal()
@@ -982,6 +983,8 @@ class SettingsPanel(Overlay):
              self.line_numbers_changed),
             ("full_width", "عرض کامل متن", "متن تا لبهٔ پنجره می‌رود، مثل Notepad.",
              self.full_width_changed),
+            ("web_editor", "ویرایشگر جدید (آزمایشی)", "جدول و فهرست واقعی. از یادداشت بعدی که باز کنی فعال می‌شود.",
+             self.web_editor_changed),
         ):
             toggle = Toggle(bool(s.get(key)))
             toggle.toggled.connect(signal)

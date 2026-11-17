@@ -220,9 +220,14 @@ class FormatBar(QWidget):
         h1.clicked.connect(lambda: self.heading.emit(1))
         h2 = text_button("عنوان ۲", 12, 600, "عنوان ۲ — Ctrl+2")
         h2.clicked.connect(lambda: self.heading.emit(2))
+        # Everything up to the direction button edits the text. The web
+        # editor has its own toolbar for that; these are hidden for it.
+        self._format_widgets = [bold, h1, h2]
         for widget in (bold, h1, h2):
             row.addWidget(widget)
-        row.addWidget(_Separator())
+        first_rule = _Separator()
+        self._format_widgets.append(first_rule)
+        row.addWidget(first_rule)
         for glyph, tip, signal in (("bullets", "فهرست", self.bullets),
                                    ("numbered", "فهرست شماره‌دار — Ctrl+Shift+7", self.numbered),
                                    ("tasks", "تبدیل خط به کار — Ctrl+Shift+9", self.task),
@@ -231,8 +236,11 @@ class FormatBar(QWidget):
                                    ("link", "پیوند به یادداشت — [[", self.link)):
             button = icon_button(glyph, tip)
             button.clicked.connect(signal)
+            self._format_widgets.append(button)
             row.addWidget(button)
-        row.addWidget(_Separator())
+        second_rule = _Separator()
+        self._format_widgets.append(second_rule)
+        row.addWidget(second_rule)
         self.direction_button = Button("راست‌چین", "align", height=30, radius=7, padding=(9, 9),
                                        gap=6, px=12, icon_size=15, stroke=1.4, normal=idle, hover=over)
         self.direction_button.setToolTip("جهت متن")
@@ -251,6 +259,11 @@ class FormatBar(QWidget):
         self.links_button.setToolTip("پنل پیوندها")
         self.links_button.clicked.connect(lambda: self.links_toggled.emit(self.links_button.isChecked()))
         row.addWidget(self.links_button)
+
+    def set_web_mode(self, on: bool):
+        """The web editor draws its own formatting toolbar; show only the rest."""
+        for widget in self._format_widgets:
+            widget.setVisible(not on)
 
     def set_direction_label(self, rtl: bool):
         self.direction_button.set_label("راست‌چین" if rtl else "چپ‌چین")
