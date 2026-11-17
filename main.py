@@ -231,7 +231,7 @@ def main() -> int:
         lambda: _report_startup(),
     )
     if "--smoke-test" in sys.argv:
-        QTimer.singleShot(0, app.quit)
+        _finish_smoke_test(window, app)
     exit_code = app.exec()
     guard.release()
     if window.updates.pending_install is not None:
@@ -244,6 +244,29 @@ def main() -> int:
                 'نصب نسخهٔ جدید شروع نشد. برنامه را دوباره باز کن و از تنظیمات ← به‌روزرسانی تلاش کن.')
     diagnostics.shutdown()
     return exit_code
+
+
+def _finish_smoke_test(window, app, limit_seconds: float = 20.0):
+    """Quit once the window is up — and, when the new editor is in use, once its
+    page has really loaded inside this (frozen) build. Exit code 3 if it never does."""
+    import time
+
+    started = time.monotonic()
+    timer = QTimer(app)
+
+    def check():
+        tab = window.current_document()
+        waiting = tab is not None and tab.is_web and not tab.editor.is_ready()
+        if not waiting:
+            timer.stop()
+            app.exit(0)
+        elif time.monotonic() - started > limit_seconds:
+            timer.stop()
+            log.error("Smoke test: the web editor page never became ready")
+            app.exit(3)
+
+    timer.timeout.connect(check)
+    timer.start(100)
 
 
 if __name__ == "__main__":
