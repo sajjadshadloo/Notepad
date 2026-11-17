@@ -56,7 +56,6 @@ SECTIONS = [
     (
         "View",
         [
-            ("Ctrl+E", "Reading view — the note as a finished page"),
             ("Ctrl+= / Ctrl+-", "Zoom in / out"),
             ("Ctrl+0", "Restore default zoom"),
             ("Ctrl+Mouse Wheel", "Zoom"),

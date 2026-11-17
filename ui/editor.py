@@ -99,8 +99,11 @@ class SmartEditor(QTextEdit):
     # the same convention Windows itself uses in text fields.
     _SHIFT_SCANCODES = {42: "ltr", 54: "rtl"}
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, full_width: bool = True):
         super().__init__(parent)
+        # Text runs to the window edge, like Notepad and Word. Off, it keeps
+        # the design's 860px reading column.
+        self._full_width = full_width
         self.setAcceptRichText(False)
         self.direction_mode = "auto"
         self._formatting = False
@@ -183,7 +186,10 @@ class SmartEditor(QTextEdit):
             self._near_pad = NUMBER_EDGE
             self._far_pad = LEFT_ROOM
             top, bottom = DOC_TOP, DOC_BOTTOM
-            far = max(LEFT_ROOM, width - self.line_number_area_width() - TEXT_MAX)
+            if self._full_width:
+                far = LEFT_ROOM
+            else:
+                far = max(LEFT_ROOM, width - self.line_number_area_width() - TEXT_MAX)
         near = self.line_number_area_width()
         margins = (round(far), 0, near, 0) if self._is_rtl_document() else (near, 0, round(far), 0)
         current = self.viewportMargins()
@@ -241,6 +247,16 @@ class SmartEditor(QTextEdit):
     def set_link_names(self, source):
         """`source() -> [str]`: note names offered after «[[»."""
         self._link_names = source
+
+    def set_full_width(self, on: bool):
+        if self._full_width == on:
+            return
+        self._full_width = on
+        self._update_line_area_width()
+        self.viewport().update()
+
+    def is_full_width(self) -> bool:
+        return self._full_width
 
     def set_line_numbers_visible(self, visible: bool):
         self._line_numbers_visible = visible

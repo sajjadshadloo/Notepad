@@ -53,3 +53,21 @@ def test_the_viewport_resize_does_not_move_the_margins(editor, qapp):
     # What QTextEdit forwards: the viewport's own, narrower size.
     editor.resizeEvent(QResizeEvent(viewport.size(), QSize(1, 1)))
     assert editor.viewportMargins() == before
+
+
+def test_full_width_lets_the_text_reach_the_window_edge(editor, qapp):
+    """A wide window gives the text the whole width; off keeps the column."""
+    editor.resize(1920, 700)
+    editor.show()
+    qapp.processEvents()
+
+    editor.set_full_width(True)
+    qapp.processEvents()
+    wide = editor.viewport().width()
+
+    editor.set_full_width(False)
+    qapp.processEvents()
+    column = editor.viewport().width()
+
+    assert wide > 1500
+    assert column <= 860

@@ -66,3 +66,17 @@ def test_the_numbered_button_numbers_the_line(window):
     editor = _type(window, "اول")
     window.format_bar.numbered.emit()
     assert editor.toPlainText().startswith("1. ")
+
+
+def test_the_reading_view_is_gone(window):
+    """4.7.3 dropped it: the editor itself is the finished page."""
+    from ui.kit import Button
+
+    labels = [b.toolTip() for b in window.format_bar.findChildren(Button)]
+    assert not any("خواندن" in label for label in labels)
+    assert not hasattr(window, "reading_action")
+    assert not hasattr(window.current_document(), "set_reading")
+
+
+def test_new_notes_use_the_full_width_by_default(window):
+    assert window.current_document().editor.is_full_width()

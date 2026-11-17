@@ -102,7 +102,7 @@ log = logging.getLogger(__name__)
 TAB_DOT_SIZE = 6
 
 APP_TITLE = "Notepad Plus"
-APP_VERSION = "4.7.2"
+APP_VERSION = "4.7.3"
 
 # Line endings, as characters rather than an escape.
 NEWLINE_CHARS = chr(13) + chr(10)
@@ -678,9 +678,10 @@ class MainWindow(QMainWindow):
             "&Line Numbers", self.toggle_line_numbers, checkable=True
         )
         self.line_numbers_action.setChecked(self._cfg.get("show_line_numbers", True))
-        self.reading_action = self._action(
-            "&Reading View", self.toggle_reading, "Ctrl+E"
+        self.full_width_action = self._action(
+            "&Full Width", self.toggle_full_width, checkable=True
         )
+        self.full_width_action.setChecked(self._cfg.get("full_width", True))
         self.shortcuts_action = self._action(
             "&Keyboard Shortcuts", self.show_shortcuts, "Ctrl+/"
         )
@@ -822,6 +823,7 @@ class MainWindow(QMainWindow):
         theme_menu.addActions(self.theme_group.actions())
         view_menu.addSeparator()
         view_menu.addAction(self.line_numbers_action)
+        view_menu.addAction(self.full_width_action)
         view_menu.addAction(self.day_widget_action)
 
         help_menu = self.menuBar().addMenu("&Help")
@@ -844,7 +846,6 @@ class MainWindow(QMainWindow):
         bar.direction.connect(self.toggle_document_direction)
         bar.focus.connect(lambda: self.set_focus_mode(True))
         bar.links_toggled.connect(self.set_links_panel_visible)
-        bar.reading_toggled.connect(self.set_reading)
         self.format_bar = bar
 
     def _build_ui(self):
@@ -1209,11 +1210,9 @@ class MainWindow(QMainWindow):
         tab.editor.set_line_numbers_visible(
             self.line_numbers_action.isChecked()
         )
+        tab.editor.set_full_width(self.full_width_action.isChecked())
         tab.state_changed.connect(lambda tab=tab: self._document_state_changed(tab))
         tab.cursor_changed.connect(self._update_status)
-        tab.reading_changed.connect(
-            lambda on, tab=tab: tab is self.current_document() and self.format_bar.set_reading(on)
-        )
         tab.editor.zoom_requested.connect(self.change_zoom)
         tab.editor.direction_changed.connect(self._editor_direction_changed)
         tab.editor.link_clicked.connect(self.open_link_target)
@@ -1433,6 +1432,7 @@ class MainWindow(QMainWindow):
         self.settings_overlay.palette_changed.connect(self._set_palette)
         self.settings_overlay.font_size_changed.connect(self._set_font_size)
         self.settings_overlay.line_numbers_changed.connect(self._set_line_numbers)
+        self.settings_overlay.full_width_changed.connect(self._set_full_width)
         self.settings_overlay.startup_changed.connect(self._set_run_at_startup)
         self.settings_overlay.tray_changed.connect(self._set_close_to_tray)
         self.settings_overlay.folder_change_requested.connect(self._choose_notes_root)
@@ -1511,6 +1511,7 @@ class MainWindow(QMainWindow):
             "palette": self._cfg.get("accent_palette", "graphite"),
             "font_size": self._cfg.get("font_size", 14.5),
             "line_numbers": self._cfg.get("show_line_numbers", True),
+            "full_width": self._cfg.get("full_width", True),
             "startup": _run_at_startup_enabled(),
             "tray": self._cfg.get("close_to_tray", True),
             "sync": sync,
@@ -1531,6 +1532,10 @@ class MainWindow(QMainWindow):
     def _set_line_numbers(self, on: bool):
         self.line_numbers_action.setChecked(on)
         self.toggle_line_numbers(on)
+
+    def _set_full_width(self, on: bool):
+        self.full_width_action.setChecked(on)
+        self.toggle_full_width(on)
 
     def _set_close_to_tray(self, on: bool):
         self._cfg["close_to_tray"] = on
@@ -1701,24 +1706,6 @@ class MainWindow(QMainWindow):
             self.open_note_from_board(str(found))
         else:
             self._create_linked_note(target)
-
-    # Reading view
-
-    def toggle_reading(self):
-        tab = self.current_document()
-        if tab:
-            self.set_reading(not tab.reading)
-
-    def set_reading(self, on: bool):
-        """Ctrl+E: the current note as a finished page — tables, links and
-        all — or back to editing it. The file is not touched either way."""
-        tab = self.current_document()
-        if tab is None:
-            self.format_bar.set_reading(False)
-            return
-        self.show_page("editor")
-        tab.set_reading(on)
-        self.format_bar.set_reading(tab.reading)
 
     # Focus mode
 
@@ -2134,14 +2121,12 @@ class MainWindow(QMainWindow):
             self._update_crumb()
         if hasattr(self, "links_panel"):
             QTimer.singleShot(0, self.refresh_links_panel)
-        if hasattr(self, "format_bar"):
-            self.format_bar.set_reading(bool(tab and tab.reading))
         if tab:
             self.direction_actions[tab.editor.direction_mode].setChecked(True)
             if tab.encoding in self.encoding_actions:
                 self.encoding_actions[tab.encoding].setChecked(True)
             self._document_state_changed(tab)
-            (tab.reader if tab.reading else tab.editor).setFocus()
+            tab.editor.setFocus()
         else:
             self.setWindowTitle(APP_TITLE)
         self._update_status()
@@ -2183,8 +2168,6 @@ class MainWindow(QMainWindow):
     def _show_search_dialog(self, focus_replace: bool):
         tab = self.current_document()
         if tab:
-            # Search walks the editor; it has to be on screen to show a match.
-            tab.set_reading(False)
             selected = tab.editor.textCursor().selectedText()
             if selected and "\u2029" not in selected:
                 self._find_dialog.find_input.setText(selected)
@@ -2220,7 +2203,6 @@ class MainWindow(QMainWindow):
         tab = self.current_document()
         if not tab:
             return
-        tab.set_reading(False)
         total = tab.editor.document().blockCount()
         current = tab.editor.textCursor().blockNumber() + 1
         line, accepted = QInputDialog.getInt(
@@ -2400,6 +2382,12 @@ class MainWindow(QMainWindow):
         for index in range(self.tabs.count()):
             self.tabs.widget(index).editor.set_line_numbers_visible(checked)
 
+    def toggle_full_width(self, checked: bool):
+        self._cfg["full_width"] = checked
+        settings_manager.save(self._cfg)
+        for index in range(self.tabs.count()):
+            self.tabs.widget(index).editor.set_full_width(checked)
+
     def set_notes_root(self, folder: str):
         self._cfg["notes_root"] = folder
         settings_manager.save(self._cfg)
@@ -2560,7 +2548,6 @@ class MainWindow(QMainWindow):
         for index in range(self.tabs.count()):
             tab = self.tabs.widget(index)
             tab.highlighter.rehighlight()
-            tab.refresh_reading()
             self.tabs.setTabIcon(index, self._dot_icon(tab.modified))
 
     def show_settings(self, section: str = "look"):

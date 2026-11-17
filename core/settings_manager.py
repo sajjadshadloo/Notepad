@@ -50,6 +50,8 @@ DEFAULTS = {
     "splitter_state": "",
     "default_save_dir": DEFAULT_SAVE_DIR,
     "show_line_numbers": True,
+    # Text runs to the window edge (like Notepad); off keeps an 860px column.
+    "full_width": True,
     # Documents open right-to-left. "auto" decides per paragraph, which reads
     # as the document jumping sides while you write; "rtl" keeps the whole
     # document on one side until you say otherwise. Code blocks stay LTR
