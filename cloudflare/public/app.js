@@ -1468,9 +1468,22 @@
       const vv = window.visualViewport;
       const root = document.documentElement.style;
       const keyboard = Boolean(vv && window.innerHeight - vv.height > 120);
-      if (keyboard) root.setProperty('--kb-height', vv.height + 'px');
-      else root.removeProperty('--kb-height');
+      if (keyboard) {
+        // iOS slides the page up under the keyboard; follow the visible part.
+        root.setProperty('--kb-height', vv.height + 'px');
+        root.setProperty('--kb-top', vv.offsetTop + 'px');
+      } else {
+        root.removeProperty('--kb-height');
+        root.removeProperty('--kb-top');
+      }
       document.documentElement.classList.toggle('kb', keyboard);
+      // Some iPhones give an installed app a window that already stops above
+      // the home indicator, and paint the rest themselves. The bottom bar must
+      // not add the indicator's space a second time.
+      const installed = navigator.standalone || (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+      const portrait = window.innerHeight > window.innerWidth;
+      if (installed && portrait && !keyboard && screen.height - window.innerHeight > 40) root.setProperty('--safe-bottom', '0px');
+      else root.removeProperty('--safe-bottom');
       return;
     }
     const visible = (window.visualViewport && window.visualViewport.height) || window.innerHeight;
@@ -1481,7 +1494,10 @@
   if (!inTelegram) document.documentElement.classList.add('standalone');
   fitViewport();
   window.addEventListener('resize', fitViewport);
-  if (window.visualViewport) window.visualViewport.addEventListener('resize', fitViewport);
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', fitViewport);
+    window.visualViewport.addEventListener('scroll', fitViewport);
+  }
   if (tg) {
     tg.ready();
     tg.expand();

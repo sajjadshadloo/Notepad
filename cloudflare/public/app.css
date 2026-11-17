@@ -5,7 +5,7 @@
 @font-face{font-family:Vazirmatn;src:url('/fonts/Vazirmatn-SemiBold.ttf') format('truetype');font-weight:600;font-display:swap}
 @font-face{font-family:Vazirmatn;src:url('/fonts/Vazirmatn-Bold.ttf') format('truetype');font-weight:700;font-display:swap}
 
-:root{color-scheme:dark;--bg:#191a1f;--surface:#212328;--soft:#2a2c33;--hover:#31343c;--line:#2f323a;--ink:#e8e9ec;--muted:#969aa5;--accent:#6cb6ff;--on:#0d1117;--danger:#ff7a85;--asoft:rgba(108,182,255,.14);--dsoft:rgba(255,122,133,.12);--chrome:#16171b;--shade:rgba(0,0,0,.4)}
+:root{--safe-bottom:env(safe-area-inset-bottom,0px);color-scheme:dark;--bg:#191a1f;--surface:#212328;--soft:#2a2c33;--hover:#31343c;--line:#2f323a;--ink:#e8e9ec;--muted:#969aa5;--accent:#6cb6ff;--on:#0d1117;--danger:#ff7a85;--asoft:rgba(108,182,255,.14);--dsoft:rgba(255,122,133,.12);--chrome:#16171b;--shade:rgba(0,0,0,.4)}
 :root[data-theme="light"]{color-scheme:light;--bg:#f1f3f7;--surface:#ffffff;--soft:#e8ebf1;--hover:#e8ebf1;--line:#dde1e8;--ink:#1c1f25;--muted:#6b7280;--accent:#1a6fd4;--on:#ffffff;--danger:#d0384a;--asoft:rgba(26,111,212,.1);--dsoft:rgba(208,56,74,.08);--chrome:#ffffff;--shade:rgba(28,31,37,.15)}
 
 *{box-sizing:border-box}
@@ -21,7 +21,7 @@ textarea,input{font-family:Vazirmatn,sans-serif}
 /* Outside Telegram: pinned to all four edges, never a percentage height. On an
    installed iPhone app 100% is shorter than the screen; top:0 + bottom:0 is not. */
 .standalone .app{position:fixed;top:0;bottom:0;left:0;right:0;margin:0 auto;height:auto}
-.standalone.kb .app{bottom:auto;height:var(--kb-height)}
+.standalone.kb .app{top:var(--kb-top,0px);bottom:auto;height:var(--kb-height)}
 .standalone,.standalone body{background:var(--chrome)}
 .screen-info{color:var(--muted);font-size:11px;text-align:center;direction:rtl}
 .app{position:relative;display:flex;flex-direction:column;height:100vh;height:var(--app-height,var(--tg-viewport-height,100dvh));max-width:640px;margin:0 auto;overflow:hidden;background:var(--bg);color:var(--ink)}
@@ -40,7 +40,7 @@ textarea,input{font-family:Vazirmatn,sans-serif}
 .scroll{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch}
 .scroll.editing{overflow:hidden}
 .scroll.editing #screen{height:100%}
-.page{padding:18px 16px calc(110px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:14px}
+.page{padding:18px 16px calc(110px + var(--safe-bottom));display:flex;flex-direction:column;gap:14px}
 .page.today{gap:18px}
 
 /* Page heads */
@@ -207,13 +207,13 @@ textarea,input{font-family:Vazirmatn,sans-serif}
 .ed-meta b{font-weight:400;padding:2px 9px;border-radius:6px;background:var(--soft);color:var(--ink)}
 .ed-text{flex:1;min-height:0;width:100%;resize:none;background:transparent;border:none;outline:none;color:var(--ink);font-size:16px;line-height:2.05;padding:12px 16px 24px;direction:rtl;unicode-bidi:plaintext;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;overscroll-behavior-y:contain}
 .ed-rich{flex:1;min-height:0;display:flex;flex-direction:column}
-.edbar{flex:none;z-index:5;display:flex;align-items:center;gap:2px;padding:8px 10px calc(8px + env(safe-area-inset-bottom));background:var(--chrome);border-top:1px solid var(--line)}
+.edbar{flex:none;z-index:5;display:flex;align-items:center;gap:2px;padding:8px 10px calc(8px + var(--safe-bottom));background:var(--chrome);border-top:1px solid var(--line)}
 .edbar button{flex:1;height:44px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;background:transparent;border:none;border-radius:10px;color:var(--ink)}
 .edbar b{font-size:15px;font-weight:700;line-height:1;font-family:ui-monospace,Consolas,monospace}
 .edbar span{font-size:10.5px;color:var(--muted)}
 
 /* Bottom navigation */
-.nav{position:absolute;left:0;right:0;bottom:0;z-index:5;height:calc(74px + env(safe-area-inset-bottom));display:flex;align-items:center;padding:0 6px calc(6px + env(safe-area-inset-bottom));background:var(--chrome);border-top:1px solid var(--line)}
+.nav{position:absolute;left:0;right:0;bottom:0;z-index:5;height:calc(74px + var(--safe-bottom));display:flex;align-items:center;padding:0 6px calc(6px + var(--safe-bottom));background:var(--chrome);border-top:1px solid var(--line)}
 .nav-item{position:relative;flex:1;height:58px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;background:transparent;border:none;color:var(--muted);font-size:11px}
 .nav-item.on{color:var(--accent)}
 .nav-fab-slot{flex:1;display:flex;justify-content:center}
@@ -222,7 +222,7 @@ textarea,input{font-family:Vazirmatn,sans-serif}
 
 /* Sheets */
 .backdrop{position:absolute;inset:0;z-index:20;background:rgba(0,0,0,.45);display:flex;align-items:flex-end}
-.sheet{width:100%;max-height:90%;overflow-y:auto;background:var(--surface);border-radius:22px 22px 0 0;padding:8px 16px calc(22px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:14px}
+.sheet{width:100%;max-height:90%;overflow-y:auto;background:var(--surface);border-radius:22px 22px 0 0;padding:8px 16px calc(22px + var(--safe-bottom));display:flex;flex-direction:column;gap:14px}
 .grip{display:flex;justify-content:center;padding:4px 0 2px}
 .grip i{width:38px;height:4px;border-radius:2px;background:var(--line)}
 .col{display:flex;flex-direction:column;gap:14px}
@@ -305,7 +305,7 @@ textarea,input{font-family:Vazirmatn,sans-serif}
 .body-text{font-size:13.5px;color:var(--muted);line-height:1.8}
 
 /* Toast */
-.toast{position:absolute;left:14px;right:14px;bottom:calc(88px + env(safe-area-inset-bottom));z-index:30;display:flex;align-items:center;gap:10px;padding:0 8px 0 14px;min-height:48px;background:var(--ink);color:var(--bg);border-radius:13px;font-size:13.5px;box-shadow:0 8px 24px var(--shade)}
+.toast{position:absolute;left:14px;right:14px;bottom:calc(88px + var(--safe-bottom));z-index:30;display:flex;align-items:center;gap:10px;padding:0 8px 0 14px;min-height:48px;background:var(--ink);color:var(--bg);border-radius:13px;font-size:13.5px;box-shadow:0 8px 24px var(--shade)}
 .toast span{flex:1;padding:12px 0;line-height:1.6}
 .toast-undo{height:34px;padding:0 12px;background:transparent;border:none;color:var(--accent);font-size:13.5px;font-weight:600}
 
