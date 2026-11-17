@@ -522,7 +522,7 @@
   const S = {
     tab: 'today', editor: null, sheet: null,
     nFolder: 'all', nQuery: '', sort: prefs('sort', 'recent'), tFilter: 'all',
-    calMode: prefs('cal', 'month'), selDay: T,
+    calMode: prefs('cal', 'month'), selDay: T, rich: prefs('rich', '') === '1',
     cap: '', capDest: 'task', capDay: null, capTime: null,
     selTask: null, selNote: null, conflictId: null, pick: 'current',
   };
@@ -895,6 +895,7 @@
   const dirty = () => Boolean(S.editor) && (S.editor.id ? S.editor.draft !== S.editor.base : S.editor.draft.trim() !== '');
   async function saveNote() {
     const ed = S.editor;
+    syncRich();
     if (!ed || !dirty()) return true;
     try {
       if (ed.id) {
@@ -916,7 +917,70 @@
     }
   }
   function leaveEditor() { S.editor = null; S.sheet = null; render(); }
-  function edBack() { if (dirty()) set({ sheet: 'unsaved' }); else leaveEditor(); }
+  function edBack() { syncRich(); if (dirty()) set({ sheet: 'unsaved' }); else leaveEditor(); }
+
+  // The new editor (the same TipTap page the desktop uses) is loaded on demand,
+  // so the plain one stays instant and works if the script cannot load.
+  let richApp = null;
+  let richLoading = null;
+  const syncRich = () => { if (richApp && S.editor) S.editor.draft = richApp.flush(); };
+  function loadRich() {
+    if (window.NotepadEditorEmbed) return Promise.resolve();
+    if (!richLoading) {
+      richLoading = new Promise((resolve, reject) => {
+        document.head.append(h('link', { rel: 'stylesheet', href: '/editor/editor.css' }));
+        document.head.append(h('script', {
+          src: '/editor/editor.js', onload: resolve,
+          onerror: () => { richLoading = null; reject(Error('ویرایشگر جدید بار نشد. ارتباط را بررسی کن.')); },
+        }));
+      });
+    }
+    return richLoading;
+  }
+  function themeRich() {
+    if (!richApp) return;
+    const style = getComputedStyle(document.documentElement);
+    const v = name => style.getPropertyValue(name).trim();
+    richApp.theme({ bg: v('--bg'), chrome: v('--chrome'), text: v('--ink'), muted: v('--muted'),
+      border: v('--line'), hover: v('--soft'), accent: v('--accent'), danger: v('--danger'), code: v('--soft') });
+  }
+  function openByTitle(title) {
+    const target = live().find(n => stemOf(n.path) === title);
+    if (!target) { flash('یادداشتی با نام «' + title + '» نیست.'); return; }
+    syncRich();
+    if (dirty()) { flash('اول این یادداشت را ذخیره کن.'); return; }
+    openNote(target);
+  }
+  function viewRich(ed) {
+    const box = h('div', { class: 'ed-rich' });
+    loadRich().then(() => {
+      if (S.editor !== ed || !box.isConnected) return;
+      richApp = window.NotepadEditorEmbed.createApp(box, {
+        tapOpensLinks: true,
+        changed: text => { ed.draft = text; updateEditor(); },
+        noteLink: openByTitle,
+        dateRequested: () => richApp.cmd('today'),
+        openUrl: url => { if (tg && tg.openLink) tg.openLink(url); else window.open(url, '_blank', 'noopener'); },
+      });
+      themeRich();
+      richApp.direction('rtl');
+      richApp.width(true);
+      richApp.open(ed.draft);
+    }).catch(error => {
+      flash(error.message);
+      S.rich = false;
+      screenKey = '';
+      render();
+    });
+    return box;
+  }
+  function toggleRich() {
+    syncRich();
+    S.rich = !S.rich;
+    setPref('rich', S.rich ? '1' : '');
+    screenKey = '';
+    render();
+  }
   function viewEditor() {
     const ed = S.editor;
     const note = edNote();
@@ -924,7 +988,7 @@
       class: 'ed-title', value: ed.title, readOnly: Boolean(ed.id), 'aria-label': 'عنوان',
       oninput: event => { ed.title = event.target.value; },
     });
-    const area = h('textarea', {
+    const area = S.rich ? viewRich(ed) : h('textarea', {
       class: 'ed-text', id: 'edText', value: ed.draft, spellcheck: false, placeholder: 'بنویس…',
       oninput: event => { ed.draft = event.target.value; updateEditor(); },
     });
@@ -934,7 +998,8 @@
         h('div', { class: 'ed-titles' }, title, h('span', { class: 'ed-state', id: 'edState' })),
         h('button', { class: 'ed-save', id: 'edSave', onclick: () => saveNote() }, 'ذخیره')),
       h('div', { class: 'ed-meta' }, h('b', null, folderLabel(ed.folder)), h('span', { id: 'edMeta' },
-        [note ? ago(note.updated_at) : 'تازه', fa(ed.draft.split('\n').length) + ' خط'].filter(Boolean).join(' · '))),
+        [note ? ago(note.updated_at) : 'تازه', fa(ed.draft.split('\n').length) + ' خط'].filter(Boolean).join(' · ')),
+      h('button', { class: 'ed-switch', onclick: toggleRich }, S.rich ? 'ویرایشگر ساده' : 'ویرایشگر جدید')),
       area);
   }
   function updateEditor() {
@@ -1314,7 +1379,7 @@
     badge.classList.toggle('hidden', !late);
     document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('on', b.dataset.tab === S.tab));
     $('nav').classList.toggle('hidden', Boolean(S.editor) || needsPairing());
-    $('edbar').classList.toggle('hidden', !S.editor);
+    $('edbar').classList.toggle('hidden', !S.editor || S.rich);
     $('scroll').classList.toggle('editing', Boolean(S.editor));
     $('syncDot').className = 'sync-dot ' + syncSummary().tone;
     if (tg && tg.BackButton && tg.isVersionAtLeast && tg.isVersionAtLeast('6.1')) {
@@ -1322,6 +1387,7 @@
     }
   }
   function render() {
+    if (!S.editor && richApp) { richApp.destroy(); richApp = null; }
     tick();
     currentTasks = allTasks().map(describe);
     renderChrome();
@@ -1372,6 +1438,7 @@
     document.documentElement.dataset.theme = scheme;
     const colours = THEMES[scheme] || THEMES.dark;
     document.querySelector('meta[name="theme-color"]').content = colours.chrome;
+    setTimeout(themeRich, 0);
     if (tg && tg.isVersionAtLeast && tg.isVersionAtLeast('6.9')) {
       try { tg.setHeaderColor(colours.chrome); tg.setBackgroundColor(colours.bg); } catch { /* older clients */ }
     }

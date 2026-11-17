@@ -48,3 +48,6 @@ cloudflare/.dev.vars*
 # Web editor
 editor-web/node_modules/
 editor-web/dist/
+
+# built from editor-web (npm run build:embed)
+cloudflare/public/editor/

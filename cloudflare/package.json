@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "build:editor": "npm --prefix ../editor-web run build:embed",
+    "deploy": "npm run build:editor && wrangler deploy"
   },
   "devDependencies": {
     "wrangler": "4.137.0"

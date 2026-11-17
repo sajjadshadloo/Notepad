@@ -1,6 +1,7 @@
 // Entry for the Qt WebEngine page. In a plain browser (the Mini App, the PWA,
 // a development tab) there is no `qt` object and the host is a stub.
 import './styles.css';
+import './page.css';
 import { createApp } from './app.js';
 
 function start(bridge) {

@@ -61,6 +61,22 @@ duplicates. At most six messages are attempted each invocation, with unattempted
 accounts before explicit failures. The 20-account beta fits four invocations;
 increasing capacity requires revisiting this batching.
 
+## Browser app (PWA)
+
+`/app` is also an installable web app. Outside Telegram there is no initData, so
+the page holds a random 256-bit device key and signs in once through the same
+pairing flow as the desktop (`POST /api/pairings`, confirm in the bot). Only the
+key's hash reaches the server. Settings -> sync sheet -> "exit from this browser"
+revokes the device. `public/sw.js` caches only the shell (page, script, style,
+fonts, icons); `/api` and `/telegram` are never cached.
+
+## Editor in the Mini App
+
+The Mini App can open notes in the same TipTap editor the desktop uses
+(`editor-web`). It is built into `public/editor/` (git-ignored). Always deploy
+with `npm run deploy` here, which builds it first. If the script is missing the
+page falls back to the plain editor.
+
 ## Development
 
 Run `npm test` and `npx wrangler deploy --dry-run` here.

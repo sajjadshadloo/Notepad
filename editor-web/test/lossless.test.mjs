@@ -170,3 +170,11 @@ test('editing a table leaves the lines around it alone', () => {
   assert.ok(out.some((l) => l.includes('19') || l.includes('29')), out.join('\n'));
   editor.destroy();
 });
+
+test('a line typed right under a table is separated from it', () => {
+  const { editor, write } = open('| a | b |\n|---|---|\n| 1 | 2 |\n');
+  editor.commands.setTextSelection(editor.state.doc.content.size - 1); // the empty line after the table
+  editor.commands.insertContent('جدید');
+  assert.equal(write(), '| a | b |\n|---|---|\n| 1 | 2 |\n\nجدید\n');
+  editor.destroy();
+});

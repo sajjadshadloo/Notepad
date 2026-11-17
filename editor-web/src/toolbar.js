@@ -18,11 +18,11 @@ const TABLE_GROUP = [
 function button([command, glyph, title, text]) {
   const b = document.createElement('button');
   b.type = 'button';
-  b.className = 'tb';
+  b.className = 'np-tb';
   b.dataset.cmd = command;
   b.title = title;
   b.setAttribute('aria-label', title);
-  b.innerHTML = glyph ? icon(glyph) : `<span class="tb-text">${text}</span>`;
+  b.innerHTML = glyph ? icon(glyph) : `<span class="np-tb-text">${text}</span>`;
   // A click must not take the caret out of the text.
   b.addEventListener('mousedown', (e) => e.preventDefault());
   return b;
@@ -30,10 +30,10 @@ function button([command, glyph, title, text]) {
 
 export function buildToolbar(host, run) {
   host.innerHTML = '';
-  host.classList.add('toolbar');
+  host.classList.add('np-toolbar');
   const addGroup = (items, cls = '') => {
     const g = document.createElement('div');
-    g.className = `tb-group ${cls}`.trim();
+    g.className = `np-tb-group ${cls}`.trim();
     for (const item of items) {
       const b = button(item);
       b.addEventListener('click', () => run(item[0]));
@@ -46,14 +46,14 @@ export function buildToolbar(host, run) {
     addGroup(group);
     if (i < GROUPS.length - 1) {
       const sep = document.createElement('span');
-      sep.className = 'tb-sep';
+      sep.className = 'np-tb-sep';
       host.appendChild(sep);
     }
   });
   const sep = document.createElement('span');
-  sep.className = 'tb-sep tb-table-only';
+  sep.className = 'np-tb-sep np-tb-table-only';
   host.appendChild(sep);
-  addGroup(TABLE_GROUP, 'tb-table-only');
+  addGroup(TABLE_GROUP, 'np-tb-table-only');
   return host;
 }
 

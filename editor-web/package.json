@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
+    "build:embed": "vite build --config vite.embed.config.js",
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {

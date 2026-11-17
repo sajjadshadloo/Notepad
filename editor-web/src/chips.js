@@ -21,14 +21,14 @@ function scan(doc) {
       if (!p) continue;
       const tone = p.delta < 0 ? 'late' : p.delta === 0 ? 'today' : 'soon';
       out.push(Decoration.inline(pos + m.index, pos + m.index + m[0].length, {
-        class: `chip chip-date chip-${tone}`,
+        class: `np-chip np-chip-date np-chip-${tone}`,
         'data-label': p.label,
       }));
     }
     NOTE.lastIndex = 0;
     while ((m = NOTE.exec(text)) !== null) {
       out.push(Decoration.inline(pos + m.index, pos + m.index + m[0].length, {
-        class: 'chip chip-note',
+        class: 'np-chip np-chip-note',
         'data-target': m[1].split('|')[0].trim(),
       }));
     }
@@ -49,7 +49,7 @@ export const Chips = Extension.create({
         decorations(state) { return this.getState(state); },
         handleClick: (view, pos, event) => {
           const el = event.target;
-          if (el && el.classList && el.classList.contains('chip-note') && (event.ctrlKey || event.metaKey || !view.editable)) {
+          if (el && el.classList && el.classList.contains('np-chip-note') && (event.ctrlKey || event.metaKey || !view.editable)) {
             const target = el.getAttribute('data-target');
             if (target && window.__noteLink) { window.__noteLink(target); return true; }
           }

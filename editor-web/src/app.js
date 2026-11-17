@@ -11,11 +11,12 @@ import { stampFor } from './jalali.js';
 const noop = () => {};
 
 export function createApp(root, host = {}) {
-  const h = { changed: noop, dirty: noop, cursor: noop, ready: noop, noteLink: noop, dateRequested: noop, zoom: noop, openUrl: (u) => window.open(u, '_blank'), ...host };
-  root.innerHTML = '<div class="toolbar"></div><div class="scroller"><div class="page"></div></div>';
-  const toolbarEl = root.querySelector('.toolbar');
-  const pageEl = root.querySelector('.page');
-  const scroller = root.querySelector('.scroller');
+  const h = { tapOpensLinks: false, changed: noop, dirty: noop, cursor: noop, ready: noop, noteLink: noop, dateRequested: noop, zoom: noop, openUrl: (u) => window.open(u, '_blank'), ...host };
+  root.classList.add('np-editor');
+  root.innerHTML = '<div class="np-toolbar"></div><div class="np-scroller"><div class="np-page"></div></div>';
+  const toolbarEl = root.querySelector('.np-toolbar');
+  const pageEl = root.querySelector('.np-page');
+  const scroller = root.querySelector('.np-scroller');
 
   let editor = null;
   let state = null;
@@ -78,6 +79,8 @@ export function createApp(root, host = {}) {
     pageEl.innerHTML = '';
     editor = new Editor({
       element: pageEl,
+      // TipTap's own <style> is blocked by the Mini App's strict CSP; styles.css carries it.
+      injectCSS: false,
       extensions: createExtensions(),
       editorProps: { attributes: { spellcheck: 'false', 'data-gramm': 'false' } },
     });
@@ -138,7 +141,7 @@ export function createApp(root, host = {}) {
   function askLink() {
     const current = editor.getAttributes('link').href || '';
     const box = document.createElement('div');
-    box.className = 'popover';
+    box.className = 'np-popover';
     box.innerHTML = '<input type="text" dir="ltr" placeholder="https://…" /><button type="button">تأیید</button>';
     const input = box.querySelector('input');
     const ok = box.querySelector('button');
@@ -210,13 +213,13 @@ export function createApp(root, host = {}) {
   const linkAt = (e) => e.target.closest && e.target.closest('a[href]');
   pageEl.addEventListener('click', (e) => {
     const a = linkAt(e);
-    if (a && (e.ctrlKey || e.metaKey)) {
+    if (a && (e.ctrlKey || e.metaKey || h.tapOpensLinks)) {
       e.preventDefault();
       h.openUrl(a.getAttribute('href'));
     }
   });
   pageEl.addEventListener('mousemove', (e) => {
-    pageEl.classList.toggle('ctrl-link', (e.ctrlKey || e.metaKey) && !!linkAt(e));
+    root.classList.toggle('ctrl-link', (e.ctrlKey || e.metaKey) && !!linkAt(e));
   });
 
   const api = {
@@ -272,6 +275,7 @@ export function createApp(root, host = {}) {
       suppressCursor = false;
       return true;
     },
+    destroy: () => { clearTimeout(timer); if (editor) editor.destroy(); editor = null; },
     scrollToTop: () => { scroller.scrollTop = 0; },
   };
   mount('');

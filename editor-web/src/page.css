@@ -1,0 +1,4 @@
+/* Only for the standalone page (the desktop's web view). A host page that
+   embeds the editor brings its own, so this is not part of the embed. */
+html, body { margin: 0; height: 100%; background: #191a1f; overflow: hidden; }
+body > .np-editor { height: 100%; }

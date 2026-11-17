@@ -305,6 +305,9 @@ export function saveDetailed(markdown, state, json) {
       piece = { body: serializeNodes(markdown, group, state.eol), term: null };
     }
     piece.count = group.length;
+    piece.first = group[0].type;
+    piece.last = group[group.length - 1].type;
+    piece.fresh = piece.term === null;
     pieces.push(piece);
   }
   let text = '';
@@ -312,6 +315,12 @@ export function saveDetailed(markdown, state, json) {
   let line = 0;
   pieces.forEach((piece, i) => {
     const last = i === pieces.length - 1;
+    // A line typed right under a table would read as one more table row.
+    if (i > 0 && piece.fresh && piece.body !== '' && piece.first === 'paragraph'
+        && pieces[i - 1].last === 'table') {
+      text += state.eol;
+      line += 1;
+    }
     for (let k = 0; k < piece.count; k += 1) starts.push(line);
     text += piece.body;
     line += (piece.body.match(/\r\n|\n|\r/g) || []).length;
